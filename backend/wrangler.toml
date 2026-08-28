@@ -1,0 +1,23 @@
+name = "bebinim-backend"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "a47c4851daa6d1165a88f2f68ac093f3"
+
+[vars]
+OTP_DEV_MODE = "true"
+APP_NAME = "bebinim"
+JWT_SECRET = "b07dd05705b2c4c9033273fa151955b6a4055fbfd2e44d29588eb587d6087f56"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bebinim-db"
+database_id = "b93eadc2-6bc8-4912-9a66-26e24542c162"
+
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "LobbyRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["LobbyRoom"]

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="dark_navy_background">#FF050C1A</color>
+    <color name="yellow_accent">#FFFFC500</color>
+    <color name="notification_color">#FF71F0C4</color>
+</resources>
