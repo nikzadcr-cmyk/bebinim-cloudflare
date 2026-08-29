@@ -206,6 +206,9 @@ class LobbyViewModel : ViewModel() {
         webSocketManager.clearPlayer()
     }
 
+    /** Set the player URL locally without broadcasting (original had this on the ViewModel too). */
+    fun updateVideoUrl(url: String) = webSocketManager.updateVideoUrl(url)
+
     fun exitLobby() {
         viewModelScope.launch {
             voiceRelayManager?.leaveCall()
