@@ -1266,12 +1266,16 @@ private fun PlayerSurface(
                 )
                 if (contentFrame != null && showController) {
                     val pv = this
+                    val controllerView = findViewById<android.view.View?>(
+                        androidx.media3.ui.R.id.exo_controller
+                    )
                     val detector = android.view.GestureDetector(
                         context,
                         object : android.view.GestureDetector.SimpleOnGestureListener() {
                             override fun onSingleTapUp(e: android.view.MotionEvent): Boolean {
                                 if (!pv.useController) return true
-                                if (pv.isControllerVisible) pv.hideController() else pv.showController()
+                                val visible = controllerView?.visibility == android.view.View.VISIBLE
+                                if (visible) pv.hideController() else pv.showController()
                                 return true
                             }
                         }
