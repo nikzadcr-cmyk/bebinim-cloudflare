@@ -17,7 +17,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
-import okio.toByteString
 
 // ---------------- state models (same fields as original) ----------------
 data class ChatMessage(
@@ -430,7 +429,7 @@ class WebSocketManager private constructor() {
 
     /** Send raw binary (voice frames) through the active socket. */
     fun rawSendBinary(bytes: ByteArray) {
-        try { webSocket?.send(bytes.toByteString(0, bytes.size)) } catch (_: Exception) {}
+        try { webSocket?.send(okio.Buffer().write(bytes).readByteString()) } catch (_: Exception) {}
     }
 
     private fun send(json: JSONObject) {
