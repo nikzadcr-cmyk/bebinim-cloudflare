@@ -8,6 +8,8 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import com.app.bebinim.data.websocket.WebSocketManager
 import kotlinx.coroutines.CoroutineScope
@@ -116,6 +118,9 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private var keepAliveJob: Job? = null
     private var cleanupJob: Job? = null
     private var audioRecord: AudioRecord? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    @Volatile private var lastKeyAttemptMs = 0L
 
     /** binary router hook — receives relayed frames from WebSocketManager */
     init {
@@ -165,6 +170,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private suspend fun ensureFreshCredential() {
         val now = System.currentTimeMillis()
         if (aesKey != null && credentialExpiresAtMs > now + CREDENTIAL_REFRESH_MARGIN_MS) return
+        lastKeyAttemptMs = now
         val cred = ws.requestVoiceToken() ?: return
         try {
             val raw = Base64.decode(cred.keyBase64, Base64.NO_WRAP)
@@ -180,7 +186,8 @@ class VoiceRelayManager private constructor(private val context: Context) {
                 ensureFreshCredential()
                 // no-op HELLO: the relay infers liveness from mic-status + audio
             } catch (_: Exception) {}
-            delay(KEEPALIVE_INTERVAL_MS)
+            // retry fast until a key is available (no key = muted RX/TX)
+            delay(if (aesKey == null) 2000L else KEEPALIVE_INTERVAL_MS)
         }
     }
 
@@ -208,6 +215,14 @@ class VoiceRelayManager private constructor(private val context: Context) {
             AudioFormat.ENCODING_PCM_16BIT,
             maxOf(minBuf, FRAME_SIZE_BYTES * 4)
         )
+        // hardware echo-cancel + noise-suppression — without these the far end
+        // hears loud hiss/noise ("صدای نویز شدید")
+        try {
+            audioRecord?.sessionId?.let { sid ->
+                echoCanceler = AcousticEchoCanceler.create(sid)
+                noiseSuppressor = NoiseSuppressor.create(sid)
+            }
+        } catch (_: Exception) {}
         captureJob = scope.launch {
             val buf = ByteArray(FRAME_SIZE_BYTES)
             try {
@@ -230,6 +245,10 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private fun stopCapture() {
         captureJob?.cancel()
         captureJob = null
+        try { echoCanceler?.release() } catch (_: Exception) {}
+        try { noiseSuppressor?.release() } catch (_: Exception) {}
+        echoCanceler = null
+        noiseSuppressor = null
         try { audioRecord?.stop(); audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
     }
@@ -276,6 +295,16 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private fun handleAudioPacket(bytes: ByteArray) {
         val senderSession = readInt32BE(bytes, 1)
         if (senderSession == mySessionId) return
+        // NO KEY = NO PLAYBACK. Playing undecryptable bytes as raw PCM was the
+        // "صدای نویز شدید" bug. Instead: drop the frame and retry fetching the key.
+        if (aesKey == null) {
+            val now = System.currentTimeMillis()
+            if (now - lastKeyAttemptMs > 1500) {
+                lastKeyAttemptMs = now
+                scope.launch { ensureFreshCredential() }
+            }
+            return
+        }
         val rseq = readInt16BE(bytes, 5) and 0xFFFF
         val peer = peers.getOrPut(senderSession) { PeerAudio() }
         peer.lastSeenMs = System.currentTimeMillis()
@@ -283,7 +312,9 @@ class VoiceRelayManager private constructor(private val context: Context) {
         if (diff == 0 || diff > 32768) return // duplicate / out of order
         peer.lastSeq = rseq
         val payload = bytes.copyOfRange(7, bytes.size)
-        val pcm = try { decryptAudio(payload) } catch (_: Exception) { payload }
+        // decrypt failure (key rotated on the server) → DROP the frame —
+        // never feed ciphertext garbage into the AudioTrack
+        val pcm = try { decryptAudio(payload) } catch (_: Exception) { null } ?: return
         // enqueue; a single playback coroutine per peer drains it in order
         if (peer.frames.trySend(pcm).isFailure) {
             peer.frames.tryReceive()

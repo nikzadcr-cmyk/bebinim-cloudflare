@@ -97,9 +97,9 @@ fun RegisterScreen(
         }
 
         Spacer(Modifier.height(8.dp))
-        Image(painter = painterResource(R.drawable.logo), contentDescription = "لوگو ببینیم", modifier = Modifier.size(70.dp))
+        Image(painter = painterResource(R.drawable.logo), contentDescription = "لوگو همفیلم", modifier = Modifier.size(70.dp))
         Text("ساخت حساب کاربری", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = WhiteText)
-        Text("به جمع ببینیمی‌ها خوش آمدید", fontSize = 14.sp, color = MediumGrayText, letterSpacing = 0.5.sp)
+        Text("به جمع همفیلمی‌ها خوش آمدید", fontSize = 14.sp, color = MediumGrayText, letterSpacing = 0.5.sp)
 
         Spacer(Modifier.height(24.dp))
 

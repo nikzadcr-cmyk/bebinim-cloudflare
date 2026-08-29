@@ -13,7 +13,6 @@ import com.app.bebinim.ui.screens.MusicLobbyScreen
 import com.app.bebinim.ui.screens.MyPlansScreen
 import com.app.bebinim.ui.screens.PlansScreen
 import com.app.bebinim.ui.screens.ProfileScreen
-import com.app.bebinim.ui.screens.RankingScreen
 import com.app.bebinim.ui.screens.RegisterScreen
 import com.app.bebinim.ui.screens.VideoPlayerScreen
 import com.app.bebinim.viewmodel.AuthViewModel
@@ -64,9 +63,7 @@ fun AppNavigation(navHostController: NavHostController, authViewModel: AuthViewM
         composable(Screen.Home.route) {
             HomeScreen(
                 onNavigateToLobby = { navHostController.navigate(Screen.CreateJoinLobby.withType("movie")) },
-                onNavigateToRanking = { navHostController.navigate(Screen.Ranking.route) },
                 onNavigateToProfile = { navHostController.navigate(Screen.Profile.route) },
-                onNavigateToEducation = { },
                 onLogout = {
                     authViewModel.logout()
                     navHostController.navigate(Screen.Login.route) {
@@ -94,10 +91,6 @@ fun AppNavigation(navHostController: NavHostController, authViewModel: AuthViewM
 
         composable(Screen.MyPlans.route) {
             MyPlansScreen(onBack = { navHostController.popBackStack() })
-        }
-
-        composable(Screen.Ranking.route) {
-            RankingScreen(onBack = { navHostController.popBackStack() })
         }
 
         composable(

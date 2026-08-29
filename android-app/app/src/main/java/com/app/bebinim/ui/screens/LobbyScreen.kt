@@ -230,7 +230,6 @@ fun LobbyScreen(
     var hasSentReady by remember { mutableStateOf(false) }
     var isSyncing by remember { mutableStateOf(false) }
     var micPermissionAsked by remember { mutableStateOf(false) }
-    var fsPlayerView by remember { mutableStateOf<PlayerView?>(null) }
 
     var aliasDialogShown by remember { mutableStateOf(false) }
     LaunchedEffect(joinSuccess) {
@@ -270,8 +269,26 @@ fun LobbyScreen(
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply { playWhenReady = false }
     }
+    // ONE PlayerView for the whole screen — reparented between the portrait slot and
+    // the fullscreen overlay. Previously TWO PlayerViews fought over ExoPlayer's only
+    // video surface: after exiting fullscreen the portrait view stayed black with
+    // audio only ("در حالت عمودی تصویر پخش نمیشه ولی صداش هست").
+    val sharedPlayerView = remember {
+        PlayerView(context).apply {
+            useController = true
+            setShowSubtitleButton(true)
+            subtitleView?.visibility = android.view.View.GONE
+            controllerAutoShow = false
+            setControllerHideOnTouch(false)
+            setControllerShowTimeoutMs(0)
+        }
+    }
     DisposableEffect(Unit) {
         onDispose {
+            try {
+                sharedPlayerView.setControllerVisibilityListener(null as PlayerView.ControllerVisibilityListener?)
+            } catch (_: Exception) {}
+            sharedPlayerView.player = null
             exoPlayer.release()
             lobbyViewModel.leaveLobbySilent()
         }
@@ -575,20 +592,22 @@ fun LobbyScreen(
                     .aspectRatio(16f / 9f)
                     .background(Color.Black)
             ) {
-                when (currentMode) {
-                    "shared" -> SharedModePlaceholder(
-                        sharedFileName = sharedFileName,
-                        hasLocalFile = selectedVideoUri != null,
-                        onPickFile = { videoPicker.launch("video/*") },
-                        playerContent = {
-                            PlayerSurface(exoPlayer, showController = true)
-                        }
-                    )
-                    "webview", "aparat" -> WebViewPlayer(url = currentVideoUrl)
-                    else -> {
-                        if (currentVideoUrl.isNotBlank()) {
-                            PlayerSurface(exoPlayer, showController = true)
-                        } else {
+                // while fullscreen owns the shared PlayerView, keep the portrait slot empty
+                if (!isFullscreen) {
+                    when (currentMode) {
+                        "shared" -> SharedModePlaceholder(
+                            sharedFileName = sharedFileName,
+                            hasLocalFile = selectedVideoUri != null,
+                            onPickFile = { videoPicker.launch("video/*") },
+                            playerContent = {
+                                PlayerSurface(exoPlayer, sharedPlayerView, showController = true)
+                            }
+                        )
+                        "webview", "aparat" -> WebViewPlayer(url = currentVideoUrl)
+                        else -> {
+                            if (currentVideoUrl.isNotBlank()) {
+                                PlayerSurface(exoPlayer, sharedPlayerView, showController = true)
+                            } else {
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -612,6 +631,7 @@ fun LobbyScreen(
                             }
                         }
                     }
+                }
                 }
 
                 // custom subtitle overlay (size + color configurable, like the original)
@@ -788,13 +808,14 @@ fun LobbyScreen(
         if (isFullscreen) {
             FullscreenPlayerOverlay(
                 exoPlayer = exoPlayer,
+                sharedPlayerView = sharedPlayerView,
+                isWebMode = currentMode == "webview" || currentMode == "aparat",
+                webUrl = currentVideoUrl,
                 currentCueText = currentCueText,
                 subtitleSizeSp = subtitleSizeSp,
                 subtitleTextColor = subtitleTextColor,
                 usersCount = users.size,
                 micEnabled = isMicEnabled,
-                playerView = fsPlayerView,
-                onPlayerViewReady = { fsPlayerView = it },
                 onToggleMic = {
                     if (isMicEnabled) lobbyViewModel.sendMicToggle(false)
                     else if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
@@ -809,17 +830,7 @@ fun LobbyScreen(
                 onOpenSettings = {
                     showVideoSettingsSheet = true
                 },
-                onExit = { isFullscreen = false },
-                content = {
-                    when (currentMode) {
-                        "webview", "aparat" -> WebViewPlayer(url = currentVideoUrl)
-                        else -> PlayerSurface(
-                            exoPlayer,
-                            showController = true,
-                            onPlayerView = { fsPlayerView = it }
-                        )
-                    }
-                }
+                onExit = { isFullscreen = false }
             )
         }
 
@@ -1168,28 +1179,50 @@ private fun formatTime(timestamp: Long): String =
 @UnstableApi
 @Composable
 /**
- * PlayerSurface — PlayerView with an optional ref callback so the fullscreen
- * overlay can drive showController()/hideController() (original parity).
+ * PlayerSurface — attaches the SINGLE shared PlayerView (one video surface for the
+ * whole screen). The view is reparented between the portrait slot and the fullscreen
+ * overlay via `parent.removeView` in the factory. Never create a second PlayerView
+ * for the same ExoPlayer — the old dual-view design left portrait black after
+ * returning from fullscreen.
  */
 private fun PlayerSurface(
     exoPlayer: ExoPlayer,
+    playerView: PlayerView,
     showController: Boolean,
-    onPlayerView: ((PlayerView?) -> Unit)? = null
+    controllerAutoShow: Boolean = false,
+    controllerShowTimeoutMs: Int = 0,
+    onControllerVisibility: ((Boolean) -> Unit)? = null,
+    onAttached: ((PlayerView) -> Unit)? = null
 ) {
     AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
+        factory = {
+            playerView.apply {
+                (parent as? android.view.ViewGroup)?.removeView(this)
                 this.player = exoPlayer
                 useController = showController
+                this.controllerAutoShow = controllerAutoShow
+                setControllerShowTimeoutMs(controllerShowTimeoutMs)
                 setShowSubtitleButton(true)
                 subtitleView?.visibility = android.view.View.GONE
-                controllerAutoShow = false
                 setControllerHideOnTouch(false)
-                setControllerShowTimeoutMs(0)
-                onPlayerView?.invoke(this)
+                if (onControllerVisibility != null) {
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            onControllerVisibility(visibility == android.view.View.VISIBLE)
+                        }
+                    )
+                } else {
+                    setControllerVisibilityListener(null as PlayerView.ControllerVisibilityListener?)
+                }
+                onAttached?.invoke(this)
             }
         },
-        update = { view -> view.useController = showController },
+        update = { view ->
+            view.useController = showController
+            view.controllerAutoShow = controllerAutoShow
+            view.setControllerShowTimeoutMs(controllerShowTimeoutMs)
+            if (view.player !== exoPlayer) view.player = exoPlayer
+        },
         modifier = Modifier.fillMaxSize()
     )
 }
@@ -1667,25 +1700,29 @@ private fun FloatingMessageNotification(
  *   • exit button   → TopStart, 16dp, 48dp black-0.6 circle
  *   • mic button    → CenterEnd, 16dp end / 64dp top
  *   • chat button   → CenterEnd, 16dp end / 64dp bottom
- *   • settings gear → TopEnd corner (user request), 48dp circle
+ *   • settings gear → TopEnd corner, 48dp circle
  *   • online chip   → green dot + count, under the exit button
- * Auto-hide: icons fade after 5s; a tap toggles them + the native controller
- * (original controllerVisible / controllerShowTrigger behavior).
+ *
+ * Controls fix: the previous fullscreen tap-gesture Box sat ABOVE the PlayerView
+ * and swallowed EVERY touch — the native controller appeared but play/pause/seek
+ * could never be pressed ("کنتلر ویدیو در تمام صفحه کار نمیکنه"). Now the native
+ * PlayerView controller owns the taps; the floating icons simply follow its
+ * visibility. In web mode (no native controller) a tap toggles the icons.
  */
 private fun FullscreenPlayerOverlay(
     exoPlayer: ExoPlayer,
+    sharedPlayerView: PlayerView,
+    isWebMode: Boolean,
+    webUrl: String,
     currentCueText: String,
     subtitleSizeSp: Float,
     subtitleTextColor: Color,
     usersCount: Int,
     micEnabled: Boolean,
-    playerView: PlayerView?,
-    onPlayerViewReady: (PlayerView?) -> Unit,
     onToggleMic: () -> Unit,
     onOpenChat: () -> Unit,
     onOpenSettings: () -> Unit,
-    onExit: () -> Unit,
-    content: @Composable () -> Unit
+    onExit: () -> Unit
 ) {
     val activity = LocalContext.current as? Activity
     // landscape + immersive-sticky (original lambda$95$lambda$94: setSystemUiVisibility(5894))
@@ -1703,25 +1740,48 @@ private fun FullscreenPlayerOverlay(
         }
     }
 
-    // ---- original auto-hide state (controllerVisible / controllerShowTrigger) ----
-    var controllerVisible by remember { mutableStateOf(true) }
-    var controllerShowTrigger by remember { mutableStateOf(0L) }
-
-    // hide after 5s (C.DEFAULT_MAX_SEEK_TO_PREVIOUS_POSITION_MS), like LobbyScreen$27$1$1
-    LaunchedEffect(controllerShowTrigger) {
-        if (controllerShowTrigger > 0) {
-            delay(5000)
-            controllerVisible = false
-            playerView?.hideController()
-        }
-    }
+    // floating icons follow the native controller (5s auto-hide comes from the
+    // controller timeout itself; web mode has its own tap + timer below)
+    var iconsVisible by remember { mutableStateOf(true) }
 
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        content()
+        if (isWebMode) {
+            WebViewPlayer(url = webUrl)
+            // web pages have no native controller — tap toggles the floating icons
+            LaunchedEffect(iconsVisible) {
+                if (iconsVisible) {
+                    kotlinx.coroutines.delay(5000)
+                    iconsVisible = false
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        androidx.compose.foundation.gestures.detectTapGestures {
+                            iconsVisible = !iconsVisible
+                        }
+                    }
+            )
+        } else {
+            PlayerSurface(
+                exoPlayer,
+                sharedPlayerView,
+                showController = true,
+                controllerAutoShow = true,
+                controllerShowTimeoutMs = 5000,
+                onControllerVisibility = { visible -> iconsVisible = visible }
+            )
+            // show the controller once on entry so the user sees the controls
+            LaunchedEffect(sharedPlayerView) {
+                kotlinx.coroutines.delay(200)
+                sharedPlayerView.showController()
+            }
+        }
 
         if (currentCueText.isNotBlank()) {
             Text(
@@ -1738,26 +1798,8 @@ private fun FullscreenPlayerOverlay(
             )
         }
 
-        // tap anywhere toggles icons + native controller (LobbyScreen$27$3$1)
-        Box(
-            Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTapGestures {
-                        if (controllerVisible) {
-                            controllerVisible = false
-                            playerView?.hideController()
-                        } else {
-                            controllerVisible = true
-                            playerView?.showController()
-                            controllerShowTrigger = System.currentTimeMillis()
-                        }
-                    }
-                }
-        )
-
         AnimatedVisibility(
-            visible = controllerVisible,
+            visible = iconsVisible,
             enter = fadeIn(), exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopStart)
         ) {
@@ -1778,7 +1820,7 @@ private fun FullscreenPlayerOverlay(
 
         // settings gear — TopEnd corner (no more conflict with notification)
         AnimatedVisibility(
-            visible = controllerVisible,
+            visible = iconsVisible,
             enter = fadeIn(), exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopEnd)
         ) {
@@ -1798,7 +1840,7 @@ private fun FullscreenPlayerOverlay(
 
         // online users — green dot + count, under the exit button (no overlap)
         AnimatedVisibility(
-            visible = controllerVisible,
+            visible = iconsVisible,
             enter = fadeIn(), exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopStart)
         ) {
@@ -1830,7 +1872,7 @@ private fun FullscreenPlayerOverlay(
             com.app.bebinim.ui.components.FloatingMicButton(
                 micEnabled = micEnabled,
                 onClick = onToggleMic,
-                visible = controllerVisible
+                visible = iconsVisible
             )
         }
 
@@ -1842,7 +1884,7 @@ private fun FullscreenPlayerOverlay(
         ) {
             com.app.bebinim.ui.components.FloatingChatButton(
                 onClick = onOpenChat,
-                visible = controllerVisible
+                visible = iconsVisible
             )
         }
     }
@@ -2449,11 +2491,6 @@ private fun HelpDialog(
                 Text("۳. با چت و استیکر حرف بزنید و میکروفون رو برای صحبت صوتی روشن کنید", fontSize = 12.sp, color = WhiteText.copy(alpha = 0.85f))
                 Text("۴. همه پخش‌ها همزمان بین اعضا همگام‌سازی می‌شوند", fontSize = 12.sp, color = WhiteText.copy(alpha = 0.85f))
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    "مقالات بیشتر در مجله ببینیم",
-                    fontSize = 12.sp, color = CyanAccent,
-                    modifier = Modifier.clickable { onOpenArticles() }
-                )
             }
         },
         confirmButton = {

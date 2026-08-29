@@ -37,15 +37,13 @@ import com.app.bebinim.ui.theme.WhiteText
 import com.app.bebinim.ui.theme.YellowAccent
 
 /**
- * Home — exact layout of the original app, WITHOUT the "پشتیبانی" card
- * (support section removed by design).
+ * Home — layout of the original app WITHOUT the "پشتیبانی", "رنکینگ"
+ * and "مرکز آموزش" sections (removed by design).
  */
 @Composable
 fun HomeScreen(
     onNavigateToLobby: () -> Unit,
-    onNavigateToRanking: () -> Unit,
     onNavigateToProfile: () -> Unit,
-    onNavigateToEducation: () -> Unit,
     onLogout: () -> Unit
 ) {
     Column(
@@ -60,8 +58,8 @@ fun HomeScreen(
         // Logo
         Image(
             painter = painterResource(R.drawable.logo_type),
-            contentDescription = "لوگو ببینیم",
-            modifier = Modifier.height(52.dp)
+            contentDescription = "لوگو همفیلم",
+            modifier = Modifier.height(72.dp)
         )
         Spacer(Modifier.height(8.dp))
         Text(
@@ -84,42 +82,12 @@ fun HomeScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        // Ranking (full width)
-        FullWidthMenuCard(
-            title = "رنکینگ",
-            icon = { Icon(androidx.compose.ui.res.painterResource(com.app.bebinim.R.drawable.ic_crown), null, tint = WhiteText, modifier = Modifier.size(24.dp)) },
-            gradient = Brush.linearGradient(listOf(Color(0xFF7C4DFF), Color(0xFF651FFF))),
-            onClick = onNavigateToRanking
-        )
-
-        Spacer(Modifier.height(14.dp))
-
-        // Profile (full width — the support card was removed)
+        // Profile (full width — ranking, education and support sections were removed)
         FullWidthMenuCard(
             title = "حساب کاربری",
             icon = { Icon(androidx.compose.ui.res.painterResource(com.app.bebinim.R.drawable.ic_users), null, tint = WhiteText, modifier = Modifier.size(24.dp)) },
             gradient = Brush.linearGradient(listOf(Color(0xFF1E88E5), Color(0xFF1565C0))),
             onClick = onNavigateToProfile
-        )
-
-        Spacer(Modifier.height(14.dp))
-
-        // Education center (external link, kept from the original)
-        FullWidthMenuCard(
-            title = "مرکز آموزش",
-            icon = { Icon(androidx.compose.ui.res.painterResource(com.app.bebinim.R.drawable.ic_help), null, tint = WhiteText, modifier = Modifier.size(24.dp)) },
-            gradient = Brush.linearGradient(listOf(Color(0xFF00ACC1), Color(0xFF0097A7))),
-            onClick = {
-                try {
-                    val intent = android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse("https://bebinim.me/mag/")
-                    )
-                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    com.app.bebinim.BebinimApplication.appContext?.startActivity(intent)
-                } catch (_: Exception) {
-                }
-            }
         )
 
         Spacer(Modifier.height(32.dp))

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">bebinim</string>
-    <string name="logo_cd">لوگو ببینیم</string>
+    <string name="app_name">همفیلم</string>
+    <string name="logo_cd">لوگو همفیلم</string>
     <string name="fullscreen">تمام صفحه</string>
     <string name="exit_fullscreen">خروج از تمام صفحه</string>
     <string name="music_channel_name">پخش موزیک</string>

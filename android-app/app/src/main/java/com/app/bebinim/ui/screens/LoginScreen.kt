@@ -106,7 +106,7 @@ fun LoginScreen(
 
             Image(
                 painter = painterResource(R.drawable.logo),
-                contentDescription = "لوگو ببینیم",
+                contentDescription = "لوگو همفیلم",
                 modifier = Modifier.size(90.dp)
             )
             Text("تماشای گروهی با دوستان", fontSize = 15.sp, color = MediumGrayText)
