@@ -165,8 +165,10 @@ class WebSocketManager private constructor() {
     private var pendingVoiceTokenRequest: CompletableDeferred<VoiceCredential>? = null
 
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .pingInterval(20, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)      // liveness: detect dead sockets within ~2 pings
+        .readTimeout(0, TimeUnit.MILLISECONDS)   // WebSockets must NOT have a read timeout —
+        //                                          an idle chat room (30s of silence) killed the
+        //                                          connection before ("اتصال قطع میشه")
         .writeTimeout(30, TimeUnit.SECONDS)
         .connectTimeout(15, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)

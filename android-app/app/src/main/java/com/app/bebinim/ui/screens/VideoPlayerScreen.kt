@@ -53,7 +53,8 @@ fun VideoPlayerScreen(navController: NavHostController, videoUrl: String) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(videoUrl))
             prepare()
-            playWhenReady = true
+            // original: no autoplay — playback follows the room sync (someone must start it)
+            playWhenReady = false
         }
     }
     DisposableEffect(Unit) {

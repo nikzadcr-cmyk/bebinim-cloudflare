@@ -46,7 +46,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
@@ -54,6 +57,7 @@ import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -98,6 +102,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -222,6 +227,7 @@ fun LobbyScreen(
     var playerReady by remember { mutableStateOf(false) }
     var pendingPlayState by remember { mutableStateOf<Boolean?>(null) }
     var hasSentReady by remember { mutableStateOf(false) }
+    var isSyncing by remember { mutableStateOf(false) }
     var micPermissionAsked by remember { mutableStateOf(false) }
 
     LaunchedEffect(joinSuccess) {
@@ -275,9 +281,12 @@ fun LobbyScreen(
                         .setSubtitleConfigurations(buildSubtitleConfigs(subtitleInfo, selectedSubtitleUri, context))
                         .build()
                     hasSentReady = false
-                    pendingPlayState = true // play once every member's player is ready
+                    // original behavior (LobbyScreen$9$1): load paused — "waiting for sync".
+                    // NO auto-play: playback starts only when a member presses play.
+                    pendingPlayState = null
                     exoPlayer.setMediaItem(item)
                     exoPlayer.prepare()
+                    exoPlayer.playWhenReady = false
                 }
             }
             "radio", "webview", "aparat" -> Unit
@@ -296,8 +305,9 @@ fun LobbyScreen(
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = true
                     } else {
-                        // original: load paused, start when ALL members are ready (or via escape button)
-                        pendingPlayState = true
+                        // original ($9$1): "prepare() called, waiting for state change..."
+                        // load PAUSED — the user (or a remote play command) starts it.
+                        pendingPlayState = null
                         exoPlayer.setMediaItem(builder.build())
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = false
@@ -324,25 +334,32 @@ fun LobbyScreen(
     }
 
     // apply incoming play/pause + seek sync from others
+    // (original isSyncing guard — prevents seek ping-pong flooding the socket)
     LaunchedEffect(videoSyncState) {
         videoSyncState?.let { sync ->
             if (currentMode == "link" || currentMode == "shared") {
+                isSyncing = true
                 exoPlayer.seekTo((sync.currentTime * 1000).toLong())
                 exoPlayer.playWhenReady = sync.isPlaying
+                delay(800)
+                isSyncing = false
             }
         }
     }
 
-    // late-join full playback sync
+    // late-join full playback sync (same isSyncing guard as above)
     LaunchedEffect(playbackSyncState) {
         playbackSyncState?.let { sync ->
-            if (sync.mode == "link" && !sync.videoUrl.isNullOrBlank()) {
-                exoPlayer.setMediaItem(MediaItem.Builder().setUri(sync.videoUrl).build())
-                exoPlayer.prepare()
-            }
             if (sync.mode == "link" || sync.mode == "shared") {
+                isSyncing = true
+                if (sync.mode == "link" && !sync.videoUrl.isNullOrBlank()) {
+                    exoPlayer.setMediaItem(MediaItem.Builder().setUri(sync.videoUrl).build())
+                    exoPlayer.prepare()
+                }
                 exoPlayer.seekTo((sync.currentTime * 1000).toLong())
                 exoPlayer.playWhenReady = sync.isPlaying
+                delay(800)
+                isSyncing = false
             }
         }
     }
@@ -383,7 +400,8 @@ fun LobbyScreen(
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (exoPlayer.playbackState == Player.STATE_READY) {
+                // original: "⏸️ Not sending state - syncing=..." — skip while applying remote sync
+                if (!isSyncing && exoPlayer.playbackState == Player.STATE_READY) {
                     lobbyViewModel.updateVideoState(
                         exoPlayer.currentPosition / 1000.0, isPlaying
                     )
@@ -396,7 +414,8 @@ fun LobbyScreen(
                 reason: Int
             ) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK &&
-                    exoPlayer.playbackState == Player.STATE_READY
+                    exoPlayer.playbackState == Player.STATE_READY &&
+                    !isSyncing // original: "⏸️ Not sending seek - syncing=..."
                 ) {
                     lobbyViewModel.seekVideo(exoPlayer.currentPosition / 1000.0)
                 }
@@ -613,9 +632,12 @@ fun LobbyScreen(
                     )
                 }
 
-                // buffering / waiting-for-ready overlay (only while real content is loaded)
+                // buffering / waiting-for-ready overlay — only while playback was actually
+                // requested (remote play arrived) and we're still not ready (original behavior:
+                // videos load paused, so this never shows before someone starts playing)
                 val hasContentLoaded = if (currentMode == "shared") selectedVideoUri != null else currentVideoUrl.isNotBlank()
-                val showReadyOverlay = hasContentLoaded && !allUsersReady && readyStatus != null &&
+                val playbackRequested = videoSyncState?.isPlaying == true || pendingPlayState != null
+                val showReadyOverlay = hasContentLoaded && playbackRequested && !allUsersReady && readyStatus != null &&
                     (readyStatus?.readyCount ?: 0) < (readyStatus?.totalCount ?: 1)
                 if (showReadyOverlay) {
                     Surface2(
@@ -640,6 +662,28 @@ fun LobbyScreen(
                                 exoPlayer.playWhenReady = true
                             }) { Text("شروع بدون انتظار", fontSize = 11.sp, color = CyanAccent) }
                         }
+                    }
+                }
+
+                // fullscreen enter button (bottom-end of player, original parity)
+                val canGoFullscreen = if (currentMode == "shared") selectedVideoUri != null
+                    else currentVideoUrl.isNotBlank() || currentMode == "webview" || currentMode == "aparat"
+                if (canGoFullscreen) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                            .clickable { isFullscreen = true },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.Fullscreen, "حالت تمام صفحه",
+                            tint = Color.White, modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }
@@ -738,13 +782,51 @@ fun LobbyScreen(
             )
         }
 
-        // ---- overlays ----
+        // ---- overlays (z-order: fullscreen below chat/notification so they stay visible) ----
         EmojiBlastOverlay(emojiBlasts, Modifier.matchParentSize())
 
+        // fullscreen player overlay (landscape + immersive, original LobbyScreen$27)
+        if (isFullscreen) {
+            FullscreenPlayerOverlay(
+                exoPlayer = exoPlayer,
+                currentCueText = currentCueText,
+                subtitleSizeSp = subtitleSizeSp,
+                subtitleTextColor = subtitleTextColor,
+                usersCount = users.size,
+                micEnabled = isMicEnabled,
+                onToggleMic = {
+                    if (isMicEnabled) lobbyViewModel.sendMicToggle(false)
+                    else if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
+                        == PackageManager.PERMISSION_GRANTED
+                    ) lobbyViewModel.sendMicToggle(true)
+                    else micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                },
+                onOpenChat = {
+                    showImmersiveChat = true
+                    lastSeenMessageCount = messages.size
+                },
+                onOpenSettings = {
+                    showVideoSettingsSheet = true
+                },
+                onExit = { isFullscreen = false },
+                content = {
+                    when (currentMode) {
+                        "radio" -> RadioPlayerPlaceholder()
+                        "webview", "aparat" -> WebViewPlayer(url = currentVideoUrl)
+                        else -> PlayerSurface(exoPlayer, showController = true)
+                    }
+                }
+            )
+        }
+
+        // floating chat-message notification — rendered ABOVE fullscreen overlay
         AnimatedVisibility(
             visible = floatingMessage != null,
             enter = fadeIn(), exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter)
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 64.dp, end = 12.dp)
         ) {
             floatingMessage?.let { msg ->
                 FloatingMessageNotification(
@@ -780,27 +862,6 @@ fun LobbyScreen(
                 onStickerSend = { stickerMsg ->
                     lobbyViewModel.sendMessage(stickerMsg)
                 }
-            )
-        }
-
-        // fullscreen player overlay
-        if (isFullscreen) {
-            FullscreenPlayerOverlay(
-                exoPlayer = exoPlayer,
-                currentCueText = currentCueText,
-                subtitleSizeSp = subtitleSizeSp,
-                subtitleTextColor = subtitleTextColor,
-                usersCount = users.size,
-                micEnabled = isMicEnabled,
-                onToggleMic = {
-                    if (isMicEnabled) lobbyViewModel.sendMicToggle(false)
-                    else if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
-                        == PackageManager.PERMISSION_GRANTED
-                    ) lobbyViewModel.sendMicToggle(true)
-                    else micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-                },
-                onOpenChat = { showImmersiveChat = true },
-                onExit = { isFullscreen = false }
             )
         }
 
@@ -1544,37 +1605,43 @@ private fun FloatingMessageNotification(
     onClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    // original LobbyScreen.kt:5174 — glassmorphism chip, max 220dp, top-end, chat glyph
     Row(
         modifier = Modifier
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color(0xE6101B2E))
-            .border(1.dp, CyanAccent.copy(alpha = 0.35f), RoundedCornerShape(24.dp))
+            .widthIn(max = 220.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.15f),
+                        Color.White.copy(alpha = 0.08f)
+                    )
+                )
+            )
+            .border(
+                1.dp,
+                Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.3f),
+                        Color.White.copy(alpha = 0.1f)
+                    )
+                ),
+                RoundedCornerShape(12.dp)
+            )
             .clickable { onClick(); onDismiss() }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
+        Icon(
+            Icons.AutoMirrored.Filled.Chat, null,
+            tint = Color(0xFF60A5FA),
             modifier = Modifier
-                .size(30.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF64748B).copy(alpha = 0.3f)),
-            contentAlignment = Alignment.Center
-        ) {
-            if (!iconId.isNullOrBlank()) {
-                AsyncImage(
-                    model = LOBBY_ICON_BASE_URL + iconId + ".jpg",
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Text(message.username.take(1), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF93C5FD))
-            }
-        }
+                .size(16.dp)
+                .padding(bottom = 2.dp)
+        )
         Spacer(Modifier.width(8.dp))
-        Column {
-            Text(message.username, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = CyanAccent)
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(message.username, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 message.message, fontSize = 12.sp, color = WhiteText,
                 maxLines = 1, overflow = TextOverflow.Ellipsis
@@ -1597,13 +1664,23 @@ private fun FullscreenPlayerOverlay(
     micEnabled: Boolean,
     onToggleMic: () -> Unit,
     onOpenChat: () -> Unit,
-    onExit: () -> Unit
+    onOpenSettings: () -> Unit,
+    onExit: () -> Unit,
+    content: @Composable () -> Unit
 ) {
     val activity = LocalContext.current as? Activity
+    // landscape + immersive-sticky (original lambda$95$lambda$94: setSystemUiVisibility(5894))
     DisposableEffect(Unit) {
         activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        val decor = activity?.window?.decorView
+        if (decor != null) {
+            android.util.Log.d("LobbyScreen", "🟢 Entering fullscreen")
+            decor.systemUiVisibility = 5894
+        }
         onDispose {
+            android.util.Log.d("LobbyScreen", "🔴 Exiting fullscreen")
             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            decor?.systemUiVisibility = 0
         }
     }
     Box(
@@ -1611,7 +1688,7 @@ private fun FullscreenPlayerOverlay(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        PlayerSurface(exoPlayer, showController = true)
+        content()
 
         if (currentCueText.isNotBlank()) {
             Text(
@@ -1643,11 +1720,26 @@ private fun FullscreenPlayerOverlay(
             Icon(Icons.Filled.Close, "خروج از حالت تمام صفحه", tint = Color.White, modifier = Modifier.size(20.dp))
         }
 
-        // users count (top-end)
+        // settings gear (top-end, next to users count) — subtitle & audio track selection
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(12.dp)
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.55f))
+                .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
+                .clickable { onOpenSettings() },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Filled.Settings, "تنظیمات پلیر", tint = Color.White, modifier = Modifier.size(20.dp))
+        }
+
+        // users count chip (below the gear)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 60.dp, end = 12.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color.Black.copy(alpha = 0.55f))
                 .padding(horizontal = 10.dp, vertical = 6.dp)
@@ -1919,6 +2011,81 @@ private fun VideoSettingsSheet(
     onSubtitleSizeChange: (Float) -> Unit,
     onDismiss: () -> Unit
 ) {
+    // recompute track lists whenever the player's tracks change (original remember(exoPlayer))
+    var tracksVersion by remember { mutableIntStateOf(0) }
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onTracksChanged(tracks: Tracks) { tracksVersion++ }
+        }
+        exoPlayer.addListener(listener)
+        onDispose { exoPlayer.removeListener(listener) }
+    }
+
+    // ---- audio tracks (TRACK_TYPE_AUDIO = 1) — exact original labelling rules ----
+    val audioTracks = remember(tracksVersion) {
+        buildList {
+            runCatching {
+                exoPlayer.currentTracks.groups.forEachIndexed { gi, group ->
+                    if (group.type == C.TRACK_TYPE_AUDIO) {
+                        for (i in 0 until group.length) {
+                            val f = group.getTrackFormat(i)
+                            val lang = f.language ?: ""
+                            val label = f.label ?: ""
+                            val display = when {
+                                label.isNotBlank() && lang.isNotBlank() -> "$label ($lang)"
+                                label.isNotBlank() -> label
+                                lang.isBlank() -> "صدای ${i + 1}"
+                                else -> lang
+                            }
+                            add(Triple(group, i, display))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // ---- subtitle tracks (TRACK_TYPE_TEXT = 3) ----
+    val textTracks = remember(tracksVersion) {
+        buildList {
+            runCatching {
+                exoPlayer.currentTracks.groups.forEachIndexed { gi, group ->
+                    if (group.type == C.TRACK_TYPE_TEXT) {
+                        for (i in 0 until group.length) {
+                            val f = group.getTrackFormat(i)
+                            val lang = f.language ?: ""
+                            val label = f.label ?: ""
+                            val display = when {
+                                label.isNotBlank() && lang.isNotBlank() -> "$label ($lang)"
+                                label.isNotBlank() -> label
+                                lang.isBlank() -> "زیرنویس ${i + 1}"
+                                else -> lang
+                            }
+                            add(Triple(group, i, display))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun selectTrack(type: Int, option: Triple<Tracks.Group, Int, String>?) {
+        runCatching {
+            val tp = exoPlayer.trackSelectionParameters.buildUpon()
+            if (option == null) {
+                if (type == C.TRACK_TYPE_TEXT) {
+                    tp.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                } else {
+                    tp.clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    tp.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                }
+            } else {
+                tp.setTrackTypeDisabled(type, false)
+                tp.setOverrideForType(TrackSelectionOverride(option.first.mediaTrackGroup, option.second))
+            }
+            exoPlayer.trackSelectionParameters = tp.build()
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF101B2E)
@@ -1944,7 +2111,64 @@ private fun VideoSettingsSheet(
             }
             Spacer(Modifier.height(16.dp))
 
-            // --- subtitle section ---
+            // --- audio track section (original: group.type == C.TRACK_TYPE_AUDIO) ---
+            Text("ترک صوتی", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = WhiteText)
+            Spacer(Modifier.height(6.dp))
+            if (audioTracks.isEmpty()) {
+                Text(
+                    "ترک صوتی قابل تعویض یافت نشد",
+                    fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f)
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val selectedAudioIdx = audioTracks.indexOfFirst { it.first.isTrackSelected(it.second) }
+                    OptionRow(
+                        title = "همگام (پیش‌فرض)",
+                        selected = selectedAudioIdx == -1,
+                        onClick = { selectTrack(C.TRACK_TYPE_AUDIO, null) }
+                    )
+                    audioTracks.forEachIndexed { idx, opt ->
+                        OptionRow(
+                            title = opt.third,
+                            selected = idx == selectedAudioIdx,
+                            onClick = { selectTrack(C.TRACK_TYPE_AUDIO, opt) }
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            // --- subtitle track section (original: group.type == C.TRACK_TYPE_TEXT) ---
+            Text("زیرنویس داخلی ویدیو", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = WhiteText)
+            Spacer(Modifier.height(6.dp))
+            if (textTracks.isEmpty()) {
+                Text(
+                    "زیرنویس داخلی برای این ویدیو وجود ندارد",
+                    fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f)
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val textDisabled = runCatching {
+                        exoPlayer.trackSelectionParameters.isTrackTypeDisabled(C.TRACK_TYPE_TEXT)
+                    }.getOrDefault(false)
+                    val selectedTextIdx = textTracks.indexOfFirst { it.first.isTrackSelected(it.second) }
+                    OptionRow(
+                        title = "خاموش",
+                        selected = textDisabled || selectedTextIdx == -1,
+                        onClick = { selectTrack(C.TRACK_TYPE_TEXT, null) }
+                    )
+                    textTracks.forEachIndexed { idx, opt ->
+                        OptionRow(
+                            title = opt.third,
+                            selected = !textDisabled && idx == selectedTextIdx,
+                            onClick = { selectTrack(C.TRACK_TYPE_TEXT, opt) }
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            // --- subtitle file section ---
             Text("زیرنویس", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = WhiteText)
             Spacer(Modifier.height(4.dp))
             Text(
@@ -2021,6 +2245,40 @@ private fun VideoSettingsSheet(
                     contentAlignment = Alignment.Center
                 ) { Text("+", fontSize = 18.sp, color = WhiteText) }
             }
+        }
+    }
+}
+
+@Composable
+private fun OptionRow(title: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (selected) CyanAccent.copy(alpha = 0.15f) else Color(0xFF16213E)
+            )
+            .border(
+                1.dp,
+                if (selected) CyanAccent.copy(alpha = 0.5f) else Color.Transparent,
+                RoundedCornerShape(10.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            title,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) CyanAccent else WhiteText,
+            modifier = Modifier.weight(1f)
+        )
+        if (selected) {
+            Icon(
+                Icons.Filled.Check, "انتخاب‌شده",
+                tint = CyanAccent, modifier = Modifier.size(16.dp)
+            )
         }
     }
 }
