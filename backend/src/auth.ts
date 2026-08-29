@@ -104,8 +104,9 @@ export function ok<T>(data: T, message = 'success'): Response {
   return json({ status: 'success', message, data });
 }
 
-export function err(message: string, status = 400): Response {
-  return json({ status: 'error', message, data: null }, status);
+export function err(message: string, _status = 200): Response {
+  // Always HTTP 200: the app parses body() and reads status/message fields
+  return json({ status: 'error', message, data: null }, 200);
 }
 
 export function randomCode(len = 8): string {

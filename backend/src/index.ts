@@ -95,12 +95,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
   // ================= AUTH =================
   if (method === 'POST' && path === '/api/v1/register') {
     const body: any = await request.json().catch(() => ({}));
-    const name = String(body.name || '').trim();
     const phone = String(body.phone_number || body.phoneNumber || '').replace(/[\s-]/g, '');
     const password = String(body.password || '');
+    // name is OPTIONAL: auto-generate when empty so users can sign up with just phone + password (no OTP, no code)
+    const name = String(body.name || '').trim() || ('کاربر' + Math.floor(Math.random() * 9000 + 1000));
     if (!/^(\+98|0)?9\d{9}$/.test(phone)) return err('شماره تلفن معتبر نیست. مثال: 09123456789');
     if (password.length < 6) return err('رمز عبور باید حداقل ۶ کاراکتر باشد');
-    if (!name) return err('نام را وارد کنید');
 
     const norm = phone.startsWith('+98') ? '0' + phone.slice(3) : phone.startsWith('98') ? '0' + phone.slice(2) : phone;
     const exists = await env.DB.prepare('SELECT id FROM users WHERE phone = ?').bind(norm).first();
