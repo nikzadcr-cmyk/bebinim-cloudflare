@@ -26,7 +26,9 @@ fun AppNavigation(navHostController: NavHostController, authViewModel: AuthViewM
     androidx.compose.runtime.LaunchedEffect(Unit) {
         com.app.bebinim.ui.screens.LobbyNav.host = object : com.app.bebinim.ui.screens.LobbyNav.LobbyNavHost {
             override fun navigateToLobby(code: String, type: String) {
-                navHostController.navigate(Screen.Lobby.createRoute(code, type))
+                navHostController.navigate(Screen.Lobby.createRoute(code, type)) {
+                    launchSingleTop = true // never stack a second instance of the same lobby
+                }
             }
         }
     }

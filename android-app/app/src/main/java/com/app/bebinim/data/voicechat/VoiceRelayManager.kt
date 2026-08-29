@@ -104,7 +104,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private var credentialExpiresAtMs = 0L
 
     private var started = false
-    private var micEnabled = false
+    @Volatile private var micEnabled = false
     private var mySessionId = 0
     private var seq = 0
 
@@ -112,6 +112,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private var myUserId: String = ""
 
     private var captureJob: Job? = null
+    private var sendJob: Job? = null
     private var keepAliveJob: Job? = null
     private var cleanupJob: Job? = null
     private var audioRecord: AudioRecord? = null
@@ -126,7 +127,9 @@ class VoiceRelayManager private constructor(private val context: Context) {
         started = true
         this.lobbyCode = lobbyCode
         this.myUserId = myUserId
-        scope.launch { sendLoop() }
+        // drain stale frames queued from a previous call before reusing the channel
+        while (sendChannel.tryReceive().isSuccess) { /* discard */ }
+        sendJob = scope.launch { sendLoop() }
         keepAliveJob = scope.launch { keepAliveLoop() }
         cleanupJob = scope.launch { cleanupLoop() }
         setupAudioRouting()
@@ -140,12 +143,16 @@ class VoiceRelayManager private constructor(private val context: Context) {
 
     fun leaveCall() {
         started = false
+        micEnabled = false
         stopCapture()
+        sendJob?.cancel()
+        sendJob = null
         keepAliveJob?.cancel()
+        keepAliveJob = null
         cleanupJob?.cancel()
-        scope.launch {
-            try { sendChannel.send(buildLeave()) } catch (_: Exception) {}
-        }
+        cleanupJob = null
+        // NOTE: no LEAVE packet needed — the server drops the user's binary session when
+        // the socket closes, and 0x11 frames are ignored by the relay anyway.
         peers.values.forEach {
             try { it.frames.close() } catch (_: Exception) {}
             try { it.track.stop(); it.track.release() } catch (_: Exception) {}

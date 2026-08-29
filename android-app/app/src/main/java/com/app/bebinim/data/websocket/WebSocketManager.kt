@@ -161,6 +161,9 @@ class WebSocketManager private constructor() {
     private var hasJoinedLobby = false
     private var reconnectAttempts = 0
     private var isReconnecting = false
+    // bumped on every connect()/disconnect() — pending reconnect coroutines from an old
+    // generation must not resurrect a socket the user already left
+    private var connectGeneration = 0
 
     private var pendingVoiceTokenRequest: CompletableDeferred<VoiceCredential>? = null
 
@@ -176,6 +179,7 @@ class WebSocketManager private constructor() {
 
     // ---------------- connection ----------------
     fun connect(token: String) {
+        connectGeneration++
         if (webSocket != null) return
         authToken = token
         _isVerified.value = false
@@ -237,11 +241,13 @@ class WebSocketManager private constructor() {
         if (isReconnecting) return
         isReconnecting = true
         reconnectAttempts++
+        val gen = connectGeneration
         // fast first retries (500ms), capped backoff — snappier recovery
         val delayMs = if (reconnectAttempts <= 2) 500L * reconnectAttempts
             else 2000L * (reconnectAttempts - 1).coerceAtMost(5)
         scope.launch {
             delay(delayMs)
+            if (gen != connectGeneration) return@launch // disconnect() happened meanwhile
             webSocket = null
             isReconnecting = false
             connect(authToken)
@@ -257,6 +263,7 @@ class WebSocketManager private constructor() {
     }
 
     fun disconnect() {
+        connectGeneration++ // kill any queued reconnect from the previous generation
         reconnectAttempts = 999
         isReconnecting = false
         try { webSocket?.close(1000, "User disconnected") } catch (_: Exception) {}
@@ -269,6 +276,9 @@ class WebSocketManager private constructor() {
     private fun resetLobbyState() {
         _lobbyInfo.value = null
         _users.value = emptyList()
+        // stale lobbyClosed=true survived here — the next room then instantly showed the
+        // non-cancellable "لابی بسته شد" dialog and popped the user back out (the freeze)
+        _lobbyClosed.value = false
         _messages.value = emptyList()
         _currentVideoUrl.value = ""
         _currentPlaybackMode.value = "link"
@@ -296,6 +306,9 @@ class WebSocketManager private constructor() {
         send(JSONObject().apply {
             put("type", "basemsg-exit-lobby"); put("lobbycode", code); put("data", JSONObject())
         })
+        // leave also wipes the local lobby state — otherwise joinSuccess kept pointing at
+        // the old room and the create/join screen auto-navigated back into it
+        resetLobbyState()
     }
 
     fun exitLobby() {

@@ -71,7 +71,10 @@ fun CreateJoinLobbyScreen(
     var joiningCode by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        lobbyViewModel.clearState()
+        // wipe any stale lobby/socket state from a previous room BEFORE anything observes
+        // joinSuccess — otherwise a leftover joinSuccess (closed room) fired navigation
+        // straight back into the old lobby and it froze there
+        lobbyViewModel.resetSession()
         lobbyViewModel.fetchActiveLobbies()
         // keep the list fresh: dead lobbies drop out as soon as they close
         while (true) {
@@ -80,9 +83,11 @@ fun CreateJoinLobbyScreen(
         }
     }
 
-    // navigate to lobby after successful join/create
+    // navigate to lobby after successful join/create — ONLY for a fresh join of the code
+    // this screen actually created/joined in this session (never a stale singleton value)
     LaunchedEffect(joinSuccess) {
-        if (joinSuccess.isNotBlank()) {
+        val expectedCode = lobbyViewModel.lobbyCode.value
+        if (joinSuccess.isNotBlank() && joinSuccess == expectedCode) {
             val type = lobbyViewModel.lobbyInfo.value?.lobbyType ?: "movie"
             delay(150)
             LobbyNav.host?.navigateToLobby(joinSuccess, type)

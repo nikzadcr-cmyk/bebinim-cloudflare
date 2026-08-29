@@ -88,7 +88,14 @@ fun MusicLobbyScreen(
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply { playWhenReady = false }
     }
-    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
+    DisposableEffect(Unit) {
+        onDispose {
+            exoPlayer.release()
+            // full cleanup like the movie lobby — leaves voice, closes the socket and
+            // wipes joinSuccess so re-entering create/join can't replay the old room
+            lobbyViewModel.leaveLobbySilent()
+        }
+    }
 
     // load current music
     LaunchedEffect(currentVideoUrl) {

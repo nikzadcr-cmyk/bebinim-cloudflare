@@ -123,7 +123,6 @@ export class LobbyRoom {
     const server = pair[1];
     const socketId = 's_' + crypto.randomUUID().slice(0, 13);
     const token = new URL(request.url).searchParams.get('token') || '';
-
     const user: LobbyUser = {
       socketId, realId: '', userId: '', alias: '', icon: '', username: '',
       isCreator: false, ws: server, ready: false, micEnabled: false,
@@ -132,6 +131,11 @@ export class LobbyRoom {
     this.users.set(socketId, user);
     this.socketIds.set(server, socketId);
     this.hydrated = true; // maps are now authoritative
+    // voice session ids must stay unique across hibernation wakes — restore the counter
+    // past any session number already owned by a surviving socket
+    for (const x of this.users.values()) {
+      if (x.session >= this.nextSession) this.nextSession = x.session + 1;
+    }
 
     // Hibernating WebSocket API — the DO can hibernate between messages, so persist
     // the per-socket identity in the socket attachment and rebuild maps on wake.
@@ -479,7 +483,7 @@ export class LobbyRoom {
         this.send(socketId, {
           type: 'basemsg-voice-token',
           state: 1,
-          data: { token: cred.token, key: cred.key },
+          data: { token: cred.token, key: cred.key, expiresInSec: Math.round(VOICE_KEY_TTL_MS / 1000) },
           msg: 'ok',
         });
         return;

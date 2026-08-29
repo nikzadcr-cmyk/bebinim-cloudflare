@@ -139,7 +139,7 @@ class LobbyViewModel : ViewModel() {
 
     private suspend fun connectWithLobbyToken(token: String) {
         webSocketManager.disconnect()
-        delay(200)
+        delay(60) // tiny gap so the old socket tear-down settles (was 200ms — slow join)
         webSocketManager.connect(token)
 
         val connected = withTimeoutOrNull(15000) {
@@ -226,7 +226,27 @@ class LobbyViewModel : ViewModel() {
         }
     }
 
-    fun leaveLobbySilent() = webSocketManager.leaveLobby()
+    fun leaveLobbySilent() {
+        // FULL cleanup — the original left the socket half-alive here, so joinSuccess and
+        // the users list survived inside the WebSocketManager singleton. Re-entering the
+        // create/join screen then replayed the stale joinSuccess and threw the user straight
+        // back into the closed room (the "میره توی اتاق قبلی و هنگ میکنه" bug).
+        // NOTE: synchronous on purpose — viewModelScope may already be dying during dispose.
+        voiceRelayManager?.leaveCall()
+        voiceRelayManager = null
+        _isMicEnabled.value = false
+        webSocketManager.disconnect()
+        clearState()
+    }
+
+    /** Called when entering the create/join screen — wipes any stale lobby/socket state. */
+    fun resetSession() {
+        voiceRelayManager?.leaveCall()
+        voiceRelayManager = null
+        _isMicEnabled.value = false
+        webSocketManager.disconnect()
+        clearState()
+    }
 
     // ---------------- voice ----------------
     private var voiceRelayManager: VoiceRelayManager? = null

@@ -232,8 +232,20 @@ fun LobbyScreen(
     var micPermissionAsked by remember { mutableStateOf(false) }
     var fsPlayerView by remember { mutableStateOf<PlayerView?>(null) }
 
+    var aliasDialogShown by remember { mutableStateOf(false) }
     LaunchedEffect(joinSuccess) {
-        if (joinSuccess.isNotBlank()) showAliasDialog = true
+        // show the welcome/alias dialog only for the FIRST join of this room entry —
+        // mid-room reconnects re-fire joinSuccess and must not re-open the dialog
+        if (joinSuccess.isNotBlank() && !aliasDialogShown) {
+            aliasDialogShown = true
+            showAliasDialog = true
+        }
+    }
+
+    // voice chat: spin up the relay manager as soon as we join (was only done in the
+    // music lobby before — movie lobbies never captured/sent audio, so "ویس چت صدا نمیداد")
+    LaunchedEffect(joinSuccess) {
+        if (joinSuccess.isNotBlank()) lobbyViewModel.initVoiceChat()
     }
 
     // onboarding on first visit

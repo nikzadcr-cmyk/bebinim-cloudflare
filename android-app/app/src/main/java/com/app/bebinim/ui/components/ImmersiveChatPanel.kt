@@ -103,9 +103,10 @@ private val DividerGray = Color(0xFF374151)
 private val EmojiList = listOf("❤️", "😂", "🔥", "👍", "🎉", "😮", "😭", "👏")
 
 /**
- * Fullscreen immersive chat — EXACT original design:
- * a side window (45% of screen width in landscape / 38% in portrait) docked
- * to the screen edge over a dark scrim, video stays visible on the other half.
+ * Fullscreen immersive chat — original design:
+ * landscape → a side window (45% of screen width) docked to the screen edge over
+ * a dark scrim, video stays visible on the other half;
+ * portrait  → a full-page chat window (like the original, chat covers the screen).
  * Swipe the panel toward the edge (>100dp) or tap the scrim to close.
  */
 @Composable
@@ -129,15 +130,22 @@ fun ImmersiveChatPanel(
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
 
-    // original formula: landscape 0.45 / portrait 0.38 of screen width
+    // original formula: landscape = 45% of screen width (side window over the video),
+    // portrait = full-width chat page. Values are already in dp — NEVER run them
+    // through Float.toDp() again (that divided by density a second time and the
+    // panel ended up ~2.6x too thin: the "چت نازک و خراب" bug).
     val screenWidthDp = configuration.screenWidthDp.toFloat()
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    val panelWidth = (if (isLandscape) 0.45f else 0.38f) * screenWidthDp
+    val isFullPage = !isLandscape
+    val panelWidth = if (isLandscape) 0.45f * screenWidthDp else screenWidthDp
+    val panelWidthDp = panelWidth.dp
+    val panelShape = if (isFullPage) RoundedCornerShape(0.dp)
+        else RoundedCornerShape(topStart = 24.dp, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = 24.dp)
 
     // animated slide-out (spring 0.5/1500 like the original "chat_slide")
-    val slideTarget = if (offsetX > 100f) panelWidth else 0f
+    val slideTarget = if (offsetX > 100f) panelWidthDp else 0.dp
     val slideOffset by animateDpAsState(
-        targetValue = with(density) { slideTarget.toDp() },
+        targetValue = slideTarget,
         animationSpec = spring(dampingRatio = 0.5f, stiffness = 1500f),
         label = "chat_slide"
     )
@@ -168,7 +176,8 @@ fun ImmersiveChatPanel(
                 Modifier
                     .fillMaxSize()
                     .background(
-                        Brush.horizontalGradient(
+                        if (isFullPage) SolidColor(PanelMid.copy(alpha = 0.7f))
+                        else Brush.horizontalGradient(
                             colors = listOf(Color.Transparent, PanelMid.copy(alpha = 0.4f), PanelMid.copy(alpha = 0.7f)),
                             startX = 0f,
                             endX = gradientEndPx
@@ -177,34 +186,34 @@ fun ImmersiveChatPanel(
                     .clickable { onClose() }
             )
 
-            // ---- the side panel ----
+            // ---- the side panel / full-page chat ----
             Column(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .offset(x = slideOffset)
-                    .width(with(density) { panelWidth.toDp() })
+                    .width(panelWidthDp)
                     .fillMaxHeight()
                     .shadow(
                         24.dp,
-                        RoundedCornerShape(topStart = 24.dp, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = 24.dp),
+                        panelShape,
                         spotColor = CyanGlow.copy(alpha = 0.3f)
                     )
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                PanelTop.copy(alpha = 0.68f),
-                                PanelMid.copy(alpha = 0.72f),
-                                PanelBottom.copy(alpha = 0.68f)
+                                if (isFullPage) PanelTop.copy(alpha = 0.96f) else PanelTop.copy(alpha = 0.68f),
+                                if (isFullPage) PanelMid.copy(alpha = 0.97f) else PanelMid.copy(alpha = 0.72f),
+                                if (isFullPage) PanelBottom.copy(alpha = 0.96f) else PanelBottom.copy(alpha = 0.68f)
                             )
                         ),
-                        RoundedCornerShape(topStart = 24.dp, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = 24.dp)
+                        panelShape
                     )
                     .border(
                         1.dp,
                         Brush.horizontalGradient(
                             listOf(CyanGlow.copy(alpha = headerGlow), CyanGlow.copy(alpha = 0.2f), CyanDark.copy(alpha = 0.1f))
                         ),
-                        RoundedCornerShape(topStart = 24.dp, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = 24.dp)
+                        panelShape
                     )
                     .imePadding()
             ) {

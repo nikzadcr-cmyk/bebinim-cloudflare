@@ -29,7 +29,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayCircle
-import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -79,7 +79,7 @@ private val GuideDialogBackground: Brush =
     Brush.verticalGradient(listOf(Color(0xFF1A2440), Color(0xFF10182C)))
 private val GuideDialogBorder: Color = Color(0xFF4A9EFF).copy(alpha = 0.35f)
 
-/** The original 8-step lobby guide (archive step replaced with radio — archive removed by design). */
+/** The original 8-step lobby guide (radio step replaced with web mode — radio removed by design). */
 fun movieLobbyGuideSteps(): List<GuideStep> = listOf(
     GuideStep(
         "welcome", "به لابی خوش آمدید!",
@@ -93,9 +93,9 @@ fun movieLobbyGuideSteps(): List<GuideStep> = listOf(
         HighlightArea(12, 120, 0, 0, 12)
     ),
     GuideStep(
-        "playback_mode_radio", "حالت پخش: رادیو",
-        "با این حالت به رادیو موزیک گوش می‌دیدید.\nهمه اعضای لابی همزمان یک ایستگاه رو می‌شنوند!",
-        Icons.Filled.Radio,
+        "playback_mode_web", "حالت پخش: وب",
+        "با این حالت می‌تونید یک صفحه وب یا ویدیوی آپارات رو باز کنید.\nهمه اعضای لابی همزمان همون صفحه رو می‌بینند!",
+        Icons.Filled.Language,
         HighlightArea(120, 120, 0, 0, 12)
     ),
     GuideStep(
