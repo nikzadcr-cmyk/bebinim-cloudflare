@@ -131,6 +131,13 @@ class VoiceRelayManager private constructor(private val context: Context) {
         cleanupJob = scope.launch { cleanupLoop() }
     }
 
+    private suspend fun cleanupLoop() {
+        while (currentCoroutineContext().isActive && started) {
+            cleanupPeers(System.currentTimeMillis())
+            kotlinx.coroutines.delay(2000)
+        }
+    }
+
     fun setMicrophoneEnabled(enabled: Boolean) {
         micEnabled = enabled
         if (enabled) setupCapture() else stopCapture()

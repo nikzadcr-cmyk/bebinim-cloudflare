@@ -1261,16 +1261,17 @@ private fun PlayerSurface(
                 // tap-to-toggle on the content frame: single tap on the video area hides the
                 // controls when visible and shows them when hidden (controller must NOT be
                 // hide-on-touch=false — that made taps a no-op while controls were visible)
-                val contentFrame = view.findViewById<android.view.View?>(
+                val contentFrame = findViewById<android.view.View?>(
                     androidx.media3.ui.R.id.exo_content_frame
                 )
                 if (contentFrame != null && showController) {
+                    val pv = this
                     val detector = android.view.GestureDetector(
-                        view.context,
+                        context,
                         object : android.view.GestureDetector.SimpleOnGestureListener() {
                             override fun onSingleTapUp(e: android.view.MotionEvent): Boolean {
-                                if (!view.useController) return true
-                                if (view.isControllerVisible) view.hideController() else view.showController()
+                                if (!pv.useController) return true
+                                if (pv.isControllerVisible) pv.hideController() else pv.showController()
                                 return true
                             }
                         }
@@ -1280,7 +1281,7 @@ private fun PlayerSurface(
                         true
                     }
                 } else {
-                    contentFrame?.setOnTouchListener(null)
+                    contentFrame?.setOnTouchListener(null as android.view.View.OnTouchListener?)
                 }
                 if (onControllerVisibility != null) {
                     setControllerVisibilityListener(
