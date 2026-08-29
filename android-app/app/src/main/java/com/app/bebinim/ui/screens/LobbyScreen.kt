@@ -896,7 +896,7 @@ fun LobbyScreen(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(top = 72.dp, end = 16.dp)
+                .padding(top = 18.dp, end = 76.dp) // high up, LEFT of the 48dp fullscreen gear (gear spans 16..64dp from the end) — no overlap
         ) {
             floatingMessage?.let { msg ->
                 FloatingMessageNotification(
@@ -1708,12 +1708,12 @@ private fun FloatingMessageNotification(
     onClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    // bigger, prettier glassmorphism card (user request) with avatar + glow
+    // compact glassmorphism card (smaller + higher per user request) with avatar + glow
     Row(
         modifier = Modifier
-            .widthIn(min = 260.dp, max = 320.dp)
-            .shadow(12.dp, RoundedCornerShape(18.dp), spotColor = Color(0xFF60A5FA).copy(alpha = 0.35f))
-            .clip(RoundedCornerShape(18.dp))
+            .widthIn(min = 200.dp, max = 252.dp)
+            .shadow(8.dp, RoundedCornerShape(14.dp), spotColor = Color(0xFF60A5FA).copy(alpha = 0.35f))
+            .clip(RoundedCornerShape(14.dp))
             .background(
                 Brush.linearGradient(
                     listOf(
@@ -1731,16 +1731,16 @@ private fun FloatingMessageNotification(
                         Color.White.copy(alpha = 0.12f)
                     )
                 ),
-                RoundedCornerShape(18.dp)
+                RoundedCornerShape(14.dp)
             )
             .clickable { onClick(); onDismiss() }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // avatar
         Box(
             modifier = Modifier
-                .size(38.dp)
+                .size(24.dp)
                 .clip(CircleShape)
                 .background(Color(0xFF60A5FA).copy(alpha = 0.2f))
                 .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
@@ -1752,19 +1752,19 @@ private fun FloatingMessageNotification(
                 modifier = Modifier.fillMaxSize().clip(CircleShape)
             )
         }
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(7.dp))
         Column(modifier = Modifier.weight(1f, fill = false)) {
-            Text(message.username, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(message.username, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                message.message, fontSize = 13.sp, color = WhiteText,
-                maxLines = 2, overflow = TextOverflow.Ellipsis
+                message.message, fontSize = 10.sp, color = WhiteText,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
             )
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(6.dp))
         Icon(
             Icons.AutoMirrored.Filled.Chat, null,
             tint = Color(0xFF60A5FA),
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(14.dp)
         )
     }
 }

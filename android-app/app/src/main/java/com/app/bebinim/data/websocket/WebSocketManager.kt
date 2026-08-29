@@ -183,7 +183,12 @@ class WebSocketManager private constructor() {
         if (webSocket != null) return
         authToken = token
         _isVerified.value = false
-        if (!isReconnecting) hasJoinedLobby = false
+        if (!isReconnecting) {
+            hasJoinedLobby = false
+            // fresh (user-initiated) connect: restore reconnect budget — disconnect()
+            // parks it at 999 so a deliberate reconnect must not be throttled forever
+            reconnectAttempts = 0
+        }
 
         // token rides in the URL: the worker pre-parses it and routes the socket to the
         // per-lobby Durable Object (one isolated room per lobby code — like the original server).
@@ -247,10 +252,17 @@ class WebSocketManager private constructor() {
             else 2000L * (reconnectAttempts - 1).coerceAtMost(5)
         scope.launch {
             delay(delayMs)
-            if (gen != connectGeneration) return@launch // disconnect() happened meanwhile
+            if (gen != connectGeneration) { // disconnect() happened meanwhile
+                isReconnecting = false
+                return@launch
+            }
             webSocket = null
-            isReconnecting = false
+            // keep isReconnecting=true THROUGH connect() — connect() only resets
+            // hasJoinedLobby for FRESH (user-initiated) connections; for reconnects the
+            // flag must survive so verify-result re-joins the lobby. Clearing it here
+            // made every reconnect drop the user out of the room ("بعد چند ثانیه اف شدم")
             connect(authToken)
+            isReconnecting = false
         }
     }
 
@@ -475,7 +487,9 @@ class WebSocketManager private constructor() {
                     _isVerified.value = true
                     // mid-lobby reconnect: re-join the lobby on the fresh socket so the server
                     // re-registers us (playback sync, users list, chat) — like a fresh join.
-                    if (hasJoinedLobby && lobbyToken.isNotBlank() && _lobbyInfo.value != null) {
+                    // (lobbyInfo may still be null if the drop hit between join-send and
+                    // join-response — the stored token is enough to re-join.)
+                    if (hasJoinedLobby && lobbyToken.isNotBlank()) {
                         sendLobbyToken(lobbyToken)
                     }
                 } else {

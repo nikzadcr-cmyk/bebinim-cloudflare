@@ -51,6 +51,25 @@ object StickerCatalog {
                 Sticker("normal-stare", R.drawable.sticker_normal_stare),
                 Sticker("normal-windowstarebob", R.drawable.sticker_normal_windowstarebob)
             )
+        ),
+        StickerGroup(
+            "meme", "میم",
+            listOf(
+                Sticker("meme-laugh", R.drawable.sticker_meme_laugh),
+                Sticker("meme-what", R.drawable.sticker_meme_what),
+                Sticker("meme-smirk", R.drawable.sticker_meme_smirk),
+                Sticker("meme-cry", R.drawable.sticker_meme_cry),
+                Sticker("meme-panic", R.drawable.sticker_meme_panic),
+                Sticker("meme-cool", R.drawable.sticker_meme_cool),
+                Sticker("meme-think", R.drawable.sticker_meme_think),
+                Sticker("meme-angry", R.drawable.sticker_meme_angry),
+                Sticker("meme-scared", R.drawable.sticker_meme_scared),
+                Sticker("meme-sleepy", R.drawable.sticker_meme_sleepy),
+                Sticker("meme-popcorn", R.drawable.sticker_meme_popcorn),
+                Sticker("meme-skull", R.drawable.sticker_meme_skull),
+                Sticker("meme-tongue", R.drawable.sticker_meme_tongue),
+                Sticker("meme-please", R.drawable.sticker_meme_please)
+            )
         )
     )
 
