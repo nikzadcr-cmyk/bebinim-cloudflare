@@ -128,21 +128,18 @@ export class LobbyRoom {
     this.users.set(socketId, user);
     this.socketIds.set(server, socketId);
 
-    // classic (non-hibernating) listeners
-    server.addEventListener('message', (evt: MessageEvent) => {
-      try { void this.webSocketMessage(server, evt.data as string | ArrayBuffer); } catch (e) { console.error('ws msg error:', e); }
-    });
-    server.addEventListener('close', () => { void this.webSocketClose(server); });
-    server.addEventListener('error', () => { void this.webSocketError(server); });
+    // Hibernating WebSocket API — reliable event delivery (classic addEventListener never fired)
+    this.state.acceptWebSocket(server);
+    // return the CLIENT end in the 101 response; the accepted (server) end stays inside the DO
 
     // pre-verify the query token if present; in-band verify also supported
     if (token) { void this.tryVerify(socketId, token); }
-    return new Response(null, { status: 101, webSocket: server });
+    return new Response(null, { status: 101, webSocket: client });
   }
 
   private async tryVerify(socketId: string, token: string): Promise<void> {
     const u = this.users.get(socketId);
-    if (!u) return;
+    if (!u) { console.log('DO-VERIFY no user for', socketId); return; }
     if (u.realId) return; // already verified — avoid duplicate verify-result
     const payload = await verifyLobbyToken(token, this.env.JWT_SECRET);
     if (!payload) {
@@ -169,7 +166,7 @@ export class LobbyRoom {
   // ---------- helpers ----------
   private send(socketId: string, obj: Record<string, unknown>): void {
     const u = this.users.get(socketId);
-    if (!u?.ws || u.ws.readyState !== WebSocket.OPEN) return;
+    if (!u?.ws || u.ws.readyState !== WebSocket.OPEN) { console.log('DO-SEND FAIL readyState=', u?.ws?.readyState, 'for', obj.type); return; }
     try { u.ws.send(JSON.stringify(obj)); } catch { /* noop */ }
   }
 
@@ -215,7 +212,7 @@ export class LobbyRoom {
     }
 
     let msg: Record<string, unknown>;
-    try { msg = JSON.parse(message); } catch { return; }
+    try { msg = JSON.parse(message); } catch { console.log('DO-MSG parse fail'); return; }
     const type = String(msg.type || '');
     const data = msg.data;
     const lobbycode = msg.lobbycode;

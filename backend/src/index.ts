@@ -74,7 +74,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     // Robust approach: parse JWT payload NOW (unverified here, verified inside DO) to extract code.
     const pre = preParseJwt(token);
     const code = pre?.lobby_code || pre?.code || '_gate';
-    const id = env.LOBBY.idFromName('lobby:' + code);
+    const id = env.LOBBY.idFromName('lb2:' + code);
     const stub = env.LOBBY.get(id);
     // forward the ORIGINAL upgrade request (token already present as query param)
     return stub.fetch(request);
@@ -85,7 +85,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     const parts = path.split('/'); // /lobby-admin/{code}/{action}
     const code = parts[2];
     const action = parts[3] || '';
-    const id = env.LOBBY.idFromName('lobby:' + code);
+    const id = env.LOBBY.idFromName('lb2:' + code);
     const stub = env.LOBBY.get(id);
     return stub.fetch(new Request('https://do/' + action));
   }
@@ -322,7 +322,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     ).all<any>();
     const lobbies = [];
     for (const l of rows.results) {
-      const id = env.LOBBY.idFromName('lobby:' + l.code);
+      const id = env.LOBBY.idFromName('lb2:' + l.code);
       const stub = env.LOBBY.get(id);
       let users: Array<{ user_id: string; username: string }> = [];
       try {
