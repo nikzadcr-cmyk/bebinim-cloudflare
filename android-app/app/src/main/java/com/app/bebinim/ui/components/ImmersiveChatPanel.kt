@@ -278,7 +278,7 @@ fun ImmersiveChatPanel(
                             ) { change, dragAmount ->
                                 change.consume()
                                 // RTL: sliding out = visually toward the left = negative px
-                                offsetX = (offsetX - dragAmount.x / density.density)
+                                offsetX = (offsetX - dragAmount / density.density)
                                     .coerceAtLeast(0f)
                             }
                         }
