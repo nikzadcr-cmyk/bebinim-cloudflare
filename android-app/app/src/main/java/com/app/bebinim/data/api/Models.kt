@@ -1,4 +1,4 @@
-package com.app.bebinim.data.model
+package com.app.bebinim.data.api
 
 // ---- Envelope ----
 data class ApiResponse<T>(

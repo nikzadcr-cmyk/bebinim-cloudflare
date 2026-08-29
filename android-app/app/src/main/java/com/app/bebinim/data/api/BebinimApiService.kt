@@ -1,6 +1,5 @@
 package com.app.bebinim.data.api
 
-import com.app.bebinim.data.model.*
 import retrofit2.Response
 import retrofit2.http.*
 

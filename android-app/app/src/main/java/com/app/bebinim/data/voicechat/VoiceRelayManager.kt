@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -162,7 +163,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
     }
 
     private suspend fun keepAliveLoop() {
-        while (isActive && started) {
+        while (currentCoroutineContext().isActive && started) {
             try {
                 ensureFreshCredential()
                 // no-op HELLO: the relay infers liveness from mic-status + audio
@@ -172,7 +173,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
     }
 
     private suspend fun cleanupLoop() {
-        while (isActive && started) {
+        while (currentCoroutineContext().isActive && started) {
             val now = System.currentTimeMillis()
             peers.entries.removeIf { (sid, p) ->
                 if (now - p.lastSeenMs > PEER_IDLE_TIMEOUT_MS) {

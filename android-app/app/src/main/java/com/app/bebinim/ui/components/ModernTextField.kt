@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -52,8 +55,8 @@ fun ModernTextField(
             {
                 IconButton(onClick = onPasswordToggle) {
                     Icon(
-                        if (passwordVisible) androidx.compose.material.icons.Icons.Filled.Visibility
-                        else androidx.compose.material.icons.Icons.Filled.VisibilityOff,
+                        if (passwordVisible) Icons.Filled.Visibility
+                        else Icons.Filled.VisibilityOff,
                         contentDescription = null,
                         tint = DarkGrayText
                     )
