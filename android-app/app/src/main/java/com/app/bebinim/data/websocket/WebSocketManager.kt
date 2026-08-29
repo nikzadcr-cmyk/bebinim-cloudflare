@@ -308,12 +308,26 @@ class WebSocketManager private constructor() {
         })
     }
 
-    fun sendAlias(displayName: String) {
+    fun sendAlias(displayName: String, iconId: String = "") {
         val code = _lobbyInfo.value?.code ?: return
         send(JSONObject().apply {
             put("type", "basemsg-alias"); put("lobbycode", code)
-            put("data", JSONObject().apply { put("name", displayName) })
+            put("data", JSONObject().apply {
+                put("name", displayName)
+                if (iconId.isNotBlank()) put("icon", iconId)
+            })
         })
+    }
+
+    /** Update the video URL locally without broadcasting (late-join sync). */
+    fun updateVideoUrl(url: String) {
+        _currentVideoUrl.value = url
+    }
+
+    /** Reset local player state (mode change / clear). */
+    fun clearPlayer() {
+        _currentVideoUrl.value = ""
+        _videoSyncState.value = null
     }
 
     fun sendVideoLink(link: String) {
@@ -568,8 +582,13 @@ class WebSocketManager private constructor() {
             "basemsg-alias" -> {
                 if (state != 1) return
                 val userId = obj.optString("user_id", "")
-                val name = obj.optJSONObject("data")?.optString("name", "") ?: return
+                val d = obj.optJSONObject("data")
+                val name = d?.optString("name", "") ?: return
+                val icon = d?.optString("icon", "") ?: ""
                 _displayNames.value = _displayNames.value + (userId to name)
+                if (icon.isNotBlank()) {
+                    _userIcons.value = _userIcons.value + (userId to icon)
+                }
                 _users.value = _users.value.map {
                     if (it.userId == userId) it.copy(displayName = name) else it
                 }
@@ -580,13 +599,16 @@ class WebSocketManager private constructor() {
                 val arr = obj.optJSONArray("data") ?: return
                 val list = mutableListOf<LobbyUser>()
                 val names = _displayNames.value.toMutableMap()
+                val icons = _userIcons.value.toMutableMap()
                 for (i in 0 until arr.length()) {
                     val u = arr.optJSONObject(i) ?: continue
                     val uid = u.optString("user_id")
                     val realId = u.optString("real_id", uid)
                     val alias = u.optString("alias", "")
+                    val icon = u.optString("icon", "")
                     val username = u.optString("username", u.optString("email", "نامشخص"))
                     names[uid] = alias.ifBlank { username }
+                    if (icon.isNotBlank()) icons[uid] = icon
                     list.add(
                         LobbyUser(
                             userId = uid, realId = realId, username = username,
@@ -595,6 +617,7 @@ class WebSocketManager private constructor() {
                     )
                 }
                 _displayNames.value = names
+                _userIcons.value = icons
                 _users.value = list
             }
 

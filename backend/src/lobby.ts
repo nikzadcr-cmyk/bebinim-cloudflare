@@ -16,6 +16,7 @@ export interface LobbyUser {
   realId: string;        // authenticated user id
   userId: string;        // public user_id sent to clients (= realId)
   alias: string;
+  icon: string;
   username: string;
   isCreator: boolean;
   ws: WebSocket | null;
@@ -121,7 +122,7 @@ export class LobbyRoom {
     const token = new URL(request.url).searchParams.get('token') || '';
 
     const user: LobbyUser = {
-      socketId, realId: '', userId: '', alias: '', username: '',
+      socketId, realId: '', userId: '', alias: '', icon: '', username: '',
       isCreator: false, ws: server, ready: false, micEnabled: false,
       session: 0, lastSeen: Date.now(),
     };
@@ -188,6 +189,7 @@ export class LobbyRoom {
       real_id: u.realId,
       alias: u.alias || u.username || 'کاربر',
       username: u.alias || u.username || 'نامشخص',
+      icon: u.icon || '',
       is_creator: u.isCreator,
     }));
   }
@@ -295,13 +297,15 @@ export class LobbyRoom {
       }
 
       case 'basemsg-alias': {
-        const name = (data as { name?: string })?.name || '';
+        const d0 = (data ?? {}) as { name?: string; icon?: string };
+        const name = d0.name || '';
         u.alias = String(name).slice(0, 30) || 'کاربر';
+        if (typeof d0.icon === 'string' && d0.icon) u.icon = String(d0.icon).slice(0, 30);
         this.broadcast({
           type: 'basemsg-alias',
           state: 1,
           user_id: u.userId,
-          data: { name: u.alias },
+          data: { name: u.alias, icon: u.icon || '' },
         }, null);
         this.pushUsersList();
         return;

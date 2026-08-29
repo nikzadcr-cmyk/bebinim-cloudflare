@@ -184,7 +184,7 @@ class LobbyViewModel : ViewModel() {
     }
 
     // ---------------- lobby actions ----------------
-    fun sendAlias(name: String) = webSocketManager.sendAlias(name)
+    fun sendAlias(name: String, iconId: String = "") = webSocketManager.sendAlias(name, iconId)
     fun sendMessage(text: String) = webSocketManager.sendMessage(text)
     fun sendVideoLink(link: String) = webSocketManager.sendVideoLink(link)
     fun sendModeChange(mode: String) = webSocketManager.sendModeChange(mode)
