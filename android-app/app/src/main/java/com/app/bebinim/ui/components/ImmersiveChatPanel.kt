@@ -454,10 +454,9 @@ fun CompactMessageItem(message: ChatMessage, currentUserId: String, iconId: Stri
                             .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        AsyncImage(
-                            model = "https://app.bebinim.me/hw-assets/images/${iconId ?: "foxy"}.jpg",
+                        com.app.bebinim.ui.screens.LobbyAvatarImage(
+                            iconId = iconId,
                             contentDescription = message.username,
-                            contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize().clip(CircleShape)
                         )
                     }

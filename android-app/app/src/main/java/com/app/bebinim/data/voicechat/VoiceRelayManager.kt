@@ -10,7 +10,6 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
-import android.os.Build
 import com.app.bebinim.data.websocket.WebSocketManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,23 +17,24 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import android.util.Base64
 
 /**
  * Voice chat over the lobby WebSocket (Cloudflare Durable Object relay).
  *
- * Adapted from the original UDP relay: identical packet framing
+ * Packet framing (same as the original UDP relay):
  *   [0x10][4B BE senderSession][2B BE seq][payload]
- * except the payload is PCM16 mono 16 kHz (no Opus native dependency),
- * optionally AES-GCM encrypted with the key delivered via basemsg-voice-token.
+ * Payload = raw PCM16 mono 16 kHz.
+ *
+ * NOTE: no payload encryption — frames travel inside the wss:// (TLS) socket, which
+ * already provides confidentiality. The former AES-GCM layer caused the "voice
+ * silent both ways" failure class (key delivery races / decrypt failures dropped
+ * every frame) with zero real security benefit over TLS.
+ *
+ * Playback uses USAGE_MEDIA (media volume — the one the user is already raising to
+ * watch the movie), NOT the voice-call stream whose volume is often near zero.
  */
 class VoiceRelayManager private constructor(private val context: Context) {
 
@@ -47,12 +47,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
         const val FRAME_SIZE_SAMPLES = 320 // 20 ms @ 16 kHz
         const val FRAME_SIZE_BYTES = FRAME_SIZE_SAMPLES * 2
 
-        const val GCM_IV_LEN = 12
-        const val GCM_TAG_BITS = 128
-
-        const val KEEPALIVE_INTERVAL_MS = 5000L
         const val PEER_IDLE_TIMEOUT_MS = 8000L
-        const val CREDENTIAL_REFRESH_MARGIN_MS = 30_000L
         const val MAX_QUEUED_FRAMES = 12
 
         @Volatile
@@ -79,7 +74,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
                 )
                 return AudioTrack(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build(),
                     AudioFormat.Builder()
@@ -90,7 +85,9 @@ class VoiceRelayManager private constructor(private val context: Context) {
                     maxOf(minBuf, 11520),
                     AudioTrack.MODE_STREAM,
                     AudioManager.AUDIO_SESSION_ID_GENERATE
-                )
+                ).apply {
+                    try { setVolume(1.0f) } catch (_: Exception) {}
+                }
             }
         }
     }
@@ -99,11 +96,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private val ws = WebSocketManager.getInstance()
 
     private val peers = ConcurrentHashMap<Int, PeerAudio>()
-    private val sendChannel = Channel<ByteArray>(capacity = 32)
-    private val secureRandom = SecureRandom()
-
-    private var aesKey: SecretKeySpec? = null
-    private var credentialExpiresAtMs = 0L
+    private val sendChannel = Channel<ByteArray>(capacity = 64)
 
     private var started = false
     @Volatile private var micEnabled = false
@@ -115,29 +108,27 @@ class VoiceRelayManager private constructor(private val context: Context) {
 
     private var captureJob: Job? = null
     private var sendJob: Job? = null
-    private var keepAliveJob: Job? = null
     private var cleanupJob: Job? = null
     private var audioRecord: AudioRecord? = null
     private var echoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
-    @Volatile private var lastKeyAttemptMs = 0L
 
     /** binary router hook — receives relayed frames from WebSocketManager */
     init {
         WebSocketManager.VoiceRouter.binaryListener = { bytes -> handleBinary(bytes) }
     }
 
+    @Synchronized
     fun start(lobbyCode: String, myUserId: String) {
-        if (started) return
-        started = true
         this.lobbyCode = lobbyCode
         this.myUserId = myUserId
+        if (started) return
+        started = true
         // drain stale frames queued from a previous call before reusing the channel
         while (sendChannel.tryReceive().isSuccess) { /* discard */ }
+        seq = 0
         sendJob = scope.launch { sendLoop() }
-        keepAliveJob = scope.launch { keepAliveLoop() }
         cleanupJob = scope.launch { cleanupLoop() }
-        setupAudioRouting()
     }
 
     fun setMicrophoneEnabled(enabled: Boolean) {
@@ -152,8 +143,6 @@ class VoiceRelayManager private constructor(private val context: Context) {
         stopCapture()
         sendJob?.cancel()
         sendJob = null
-        keepAliveJob?.cancel()
-        keepAliveJob = null
         cleanupJob?.cancel()
         cleanupJob = null
         // NOTE: no LEAVE packet needed — the server drops the user's binary session when
@@ -163,39 +152,6 @@ class VoiceRelayManager private constructor(private val context: Context) {
             try { it.track.stop(); it.track.release() } catch (_: Exception) {}
         }
         peers.clear()
-        resetAudioRouting()
-    }
-
-    // ---------------- credential / hello ----------------
-    private suspend fun ensureFreshCredential() {
-        val now = System.currentTimeMillis()
-        if (aesKey != null && credentialExpiresAtMs > now + CREDENTIAL_REFRESH_MARGIN_MS) return
-        lastKeyAttemptMs = now
-        val cred = ws.requestVoiceToken() ?: return
-        try {
-            val raw = Base64.decode(cred.keyBase64, Base64.NO_WRAP)
-            aesKey = SecretKeySpec(raw, "AES")
-            credentialExpiresAtMs = now + cred.expiresInSec * 1000
-        } catch (_: Exception) {
-        }
-    }
-
-    private suspend fun keepAliveLoop() {
-        while (currentCoroutineContext().isActive && started) {
-            try {
-                ensureFreshCredential()
-                // no-op HELLO: the relay infers liveness from mic-status + audio
-            } catch (_: Exception) {}
-            // retry fast until a key is available (no key = muted RX/TX)
-            delay(if (aesKey == null) 2000L else KEEPALIVE_INTERVAL_MS)
-        }
-    }
-
-    private suspend fun cleanupLoop() {
-        while (currentCoroutineContext().isActive && started) {
-            cleanupPeers(System.currentTimeMillis())
-            delay(2000)
-        }
     }
 
     // ---------------- capture / send ----------------
@@ -208,15 +164,18 @@ class VoiceRelayManager private constructor(private val context: Context) {
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBuf, FRAME_SIZE_BYTES * 4)
-        )
-        // hardware echo-cancel + noise-suppression — without these the far end
-        // hears loud hiss/noise ("صدای نویز شدید")
+        // VOICE_COMMUNICATION gives the platform voice pipeline (AEC routing); fall back
+        // to MIC if the device refuses to initialize that source.
+        var source = MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        var record = buildRecord(source, minBuf)
+        if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
+            try { record?.release() } catch (_: Exception) {}
+            source = MediaRecorder.AudioSource.MIC
+            record = buildRecord(source, minBuf)
+        }
+        if (record == null || record.state != AudioRecord.STATE_INITIALIZED) return
+        audioRecord = record
+        // hardware echo-cancel + noise-suppression — keeps the far end clean of room noise
         try {
             audioRecord?.audioSessionId?.let { sid ->
                 echoCanceler = AcousticEchoCanceler.create(sid)
@@ -232,7 +191,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
                     if (read > 0) {
                         val frame = ByteArray(read)
                         System.arraycopy(buf, 0, frame, 0, read)
-                        sendChannel.send(encryptAudio(frame))
+                        sendChannel.send(frame)
                     }
                 }
             } catch (_: Exception) {
@@ -240,6 +199,18 @@ class VoiceRelayManager private constructor(private val context: Context) {
                 try { audioRecord?.stop() } catch (_: Exception) {}
             }
         }
+    }
+
+    private fun buildRecord(source: Int, minBuf: Int): AudioRecord? = try {
+        AudioRecord(
+            source,
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            maxOf(minBuf, FRAME_SIZE_BYTES * 4)
+        )
+    } catch (_: Exception) {
+        null
     }
 
     private fun stopCapture() {
@@ -256,7 +227,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private suspend fun sendLoop() {
         for (frame in sendChannel) {
             try {
-                sendBinary(buildAudioPacket(frame))
+                ws.rawSendBinary(buildAudioPacket(frame))
             } catch (_: Exception) {
             }
         }
@@ -266,22 +237,10 @@ class VoiceRelayManager private constructor(private val context: Context) {
         seq = (seq + 1) and 0xFFFF
         val out = ByteArray(1 + 4 + 2 + payload.size)
         out[0] = PKT_AUDIO.toByte()
-        writeInt32BE(out, 1, mySessionId)
+        writeInt32BE(out, 1, mySessionId) // server rewrites this with the assigned session
         writeInt16BE(out, 5, seq)
         System.arraycopy(payload, 0, out, 7, payload.size)
         return out
-    }
-
-    private fun buildLeave(): ByteArray {
-        val out = ByteArray(5)
-        out[0] = PKT_LEAVE.toByte()
-        writeInt32BE(out, 1, mySessionId)
-        return out
-    }
-
-    private suspend fun sendBinary(bytes: ByteArray) {
-        // WebSocketManager sends raw binary through the active socket
-        wsSendBinary(bytes)
     }
 
     // ---------------- receive / playback ----------------
@@ -294,27 +253,16 @@ class VoiceRelayManager private constructor(private val context: Context) {
 
     private fun handleAudioPacket(bytes: ByteArray) {
         val senderSession = readInt32BE(bytes, 1)
-        if (senderSession == mySessionId) return
-        // NO KEY = NO PLAYBACK. Playing undecryptable bytes as raw PCM was the
-        // "صدای نویز شدید" bug. Instead: drop the frame and retry fetching the key.
-        if (aesKey == null) {
-            val now = System.currentTimeMillis()
-            if (now - lastKeyAttemptMs > 1500) {
-                lastKeyAttemptMs = now
-                scope.launch { ensureFreshCredential() }
-            }
-            return
-        }
+        // NOTE: no local echo filter — the relay never sends a socket its own frames
+        // (verified end-to-end); the server rewrites the session header per sender.
         val rseq = readInt16BE(bytes, 5) and 0xFFFF
         val peer = peers.getOrPut(senderSession) { PeerAudio() }
         peer.lastSeenMs = System.currentTimeMillis()
         val diff = (rseq - peer.lastSeq) and 0xFFFF
         if (diff == 0 || diff > 32768) return // duplicate / out of order
         peer.lastSeq = rseq
-        val payload = bytes.copyOfRange(7, bytes.size)
-        // decrypt failure (key rotated on the server) → DROP the frame —
-        // never feed ciphertext garbage into the AudioTrack
-        val pcm = try { decryptAudio(payload) } catch (_: Exception) { null } ?: return
+        val pcm = bytes.copyOfRange(7, bytes.size)
+        if (pcm.size < 2) return
         // enqueue; a single playback coroutine per peer drains it in order
         if (peer.frames.trySend(pcm).isFailure) {
             peer.frames.tryReceive()
@@ -335,49 +283,6 @@ class VoiceRelayManager private constructor(private val context: Context) {
                 } catch (_: Exception) {
                 }
             }
-        } catch (_: Exception) {
-        }
-    }
-
-    // ---------------- crypto (AES-GCM, same design as original) ----------------
-    private fun encryptAudio(plain: ByteArray): ByteArray {
-        val key = aesKey ?: return plain
-        val iv = ByteArray(GCM_IV_LEN).also { secureRandom.nextBytes(it) }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
-        val ct = cipher.doFinal(plain)
-        val out = ByteArray(iv.size + ct.size)
-        System.arraycopy(iv, 0, out, 0, iv.size)
-        System.arraycopy(ct, 0, out, iv.size, ct.size)
-        return out
-    }
-
-    private fun decryptAudio(payload: ByteArray): ByteArray {
-        val key = aesKey ?: return payload
-        if (payload.size <= GCM_IV_LEN) return payload
-        val iv = payload.copyOfRange(0, GCM_IV_LEN)
-        val ct = payload.copyOfRange(GCM_IV_LEN, payload.size)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
-        return cipher.doFinal(ct)
-    }
-
-    // ---------------- audio routing ----------------
-    private fun setupAudioRouting() {
-        try {
-            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            am.mode = AudioManager.MODE_IN_COMMUNICATION
-            // audio must be audible — route to the speakerphone like a call app
-            am.isSpeakerphoneOn = true
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun resetAudioRouting() {
-        try {
-            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            am.isSpeakerphoneOn = false
-            am.mode = AudioManager.MODE_NORMAL
         } catch (_: Exception) {
         }
     }
@@ -408,10 +313,5 @@ class VoiceRelayManager private constructor(private val context: Context) {
                 true
             } else false
         }
-    }
-
-    private fun wsSendBinary(bytes: ByteArray) {
-        // access the raw socket through the manager's send channel
-        WebSocketManager.getInstance().let { it.rawSendBinary(bytes) }
     }
 }

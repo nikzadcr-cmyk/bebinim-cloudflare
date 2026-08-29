@@ -253,25 +253,33 @@ class LobbyViewModel : ViewModel() {
 
     fun initVoiceChat() {
         val code = _lobbyCode.value.ifBlank { webSocketManager.lobbyInfo.value?.code ?: "" }
-        val userId = webSocketManager.currentUserId.value
-        if (code.isBlank() || userId.isBlank()) return
+        if (code.isBlank()) return
+        if (voiceJoinedLobbyCode == code && voiceRelayManager != null) return
+        ensureVoiceStarted(code)
+    }
+
+    /** Starts the voice relay for [code] — safe to call repeatedly. */
+    private fun ensureVoiceStarted(code: String) {
         if (voiceJoinedLobbyCode == code && voiceRelayManager != null) return
         val context = BebinimApplication.appContext ?: return
-        viewModelScope.launch {
-            try {
-                webSocketManager.requestVoiceToken() // primes the DO voice credential
-                val manager = VoiceRelayManager.getInstance(context)
-                manager.start(code, userId)
-                voiceRelayManager = manager
-                voiceJoinedLobbyCode = code
-            } catch (_: Exception) {
-            }
+        try {
+            val manager = VoiceRelayManager.getInstance(context)
+            manager.start(code, webSocketManager.currentUserId.value)
+            voiceRelayManager = manager
+            voiceJoinedLobbyCode = code
+        } catch (_: Exception) {
         }
     }
 
     fun sendMicToggle(enabled: Boolean) {
         _isMicEnabled.value = enabled
         webSocketManager.sendMicStatus(enabled)
+        // self-heal: if initVoiceChat never ran (blank code/userId at the time), start now —
+        // otherwise the mic icon shows ON while no audio is ever captured/sent
+        if (voiceRelayManager == null) {
+            val code = _lobbyCode.value.ifBlank { webSocketManager.lobbyInfo.value?.code ?: "" }
+            if (code.isNotBlank()) ensureVoiceStarted(code)
+        }
         voiceRelayManager?.setMicrophoneEnabled(enabled)
     }
 

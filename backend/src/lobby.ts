@@ -23,6 +23,7 @@ export interface LobbyUser {
   ready: boolean;
   micEnabled: boolean;
   session: number;       // voice session id
+  lobbyCode: string;     // lobby this socket joined ("" = not in a lobby) — scopes relay/broadcasts
   lastSeen: number;
 }
 
@@ -126,7 +127,7 @@ export class LobbyRoom {
     const user: LobbyUser = {
       socketId, realId: '', userId: '', alias: '', icon: '', username: '',
       isCreator: false, ws: server, ready: false, micEnabled: false,
-      session: 0, lastSeen: Date.now(),
+      session: 0, lobbyCode: '', lastSeen: Date.now(),
     };
     this.users.set(socketId, user);
     this.socketIds.set(server, socketId);
@@ -141,7 +142,7 @@ export class LobbyRoom {
     // the per-socket identity in the socket attachment and rebuild maps on wake.
     server.serializeAttachment({
       socketId, realId: '', userId: '', alias: '', icon: '', username: '',
-      isCreator: false, ready: false, micEnabled: false, session: 0,
+      isCreator: false, ready: false, micEnabled: false, session: 0, lobbyCode: '',
     });
     this.state.acceptWebSocket(server);
     // return the CLIENT end in the 101 response; the accepted (server) end stays inside the DO
@@ -169,7 +170,7 @@ export class LobbyRoom {
           socketId: a.socketId, realId: a.realId || '', userId: a.realId || '',
           alias: a.alias || '', icon: a.icon || '', username: a.username || '',
           isCreator: !!a.isCreator, ws, ready: !!a.ready, micEnabled: !!a.micEnabled,
-          session: a.session || 0, lastSeen: Date.now(),
+          session: a.session || 0, lobbyCode: (a as { lobbyCode?: string }).lobbyCode || '', lastSeen: Date.now(),
         });
         this.socketIds.set(ws, a.socketId);
         if (a.isCreator && !this.creatorSocketId) this.creatorSocketId = a.socketId;
@@ -183,7 +184,7 @@ export class LobbyRoom {
       u.ws?.serializeAttachment({
         socketId: u.socketId, realId: u.realId, userId: u.userId, alias: u.alias,
         icon: u.icon, username: u.username, isCreator: u.isCreator,
-        ready: u.ready, micEnabled: u.micEnabled, session: u.session,
+        ready: u.ready, micEnabled: u.micEnabled, session: u.session, lobbyCode: u.lobbyCode,
       });
     } catch { /* noop */ }
   }
@@ -222,20 +223,24 @@ export class LobbyRoom {
     try { u.ws.send(JSON.stringify(obj)); } catch { /* noop */ }
   }
 
-  private sendTo(obj: Record<string, unknown>, exceptSocketId: string | null): void {
+  private sendTo(obj: Record<string, unknown>, exceptSocketId: string | null, lobby?: string): void {
     for (const [sid, u] of this.users) {
       if (exceptSocketId && sid === exceptSocketId) continue;
       if (sid === exceptSocketId) continue;
+      // lobby scoping — with the shared gate DO, in-lobby traffic must never cross lobbies
+      if (lobby !== undefined && lobby !== null && (u.lobbyCode || '') !== lobby) continue;
       this.send(sid, obj);
     }
   }
 
-  private broadcast(obj: Record<string, unknown>, exceptSocketId: string | null): void {
-    this.sendTo(obj, exceptSocketId);
+  private broadcast(obj: Record<string, unknown>, exceptSocketId: string | null, lobby?: string): void {
+    this.sendTo(obj, exceptSocketId, lobby);
   }
 
-  private usersJson(): Array<Record<string, unknown>> {
-    return Array.from(this.users.values()).map((u) => ({
+  private usersJson(lobby?: string): Array<Record<string, unknown>> {
+    return Array.from(this.users.values())
+      .filter((u) => lobby === undefined || (u.lobbyCode || '') === lobby)
+      .map((u) => ({
       user_id: u.socketId,   // client-facing id = socket id (original namespace)
       real_id: u.realId,
       alias: u.alias || u.username || 'کاربر',
@@ -245,9 +250,9 @@ export class LobbyRoom {
     }));
   }
 
-  private pushUsersList(): void {
-    const list = this.usersJson();
-    this.broadcast({ type: 'basemsg-lobby-users', state: 1, data: list }, null);
+  private pushUsersList(lobby?: string): void {
+    const list = this.usersJson(lobby);
+    this.broadcast({ type: 'basemsg-lobby-users', state: 1, data: list }, null, lobby);
   }
 
   // ---------- WS message handling ----------
@@ -306,6 +311,7 @@ export class LobbyRoom {
         await this.state.storage.put('code', this.lobbyCode);
         await this.state.storage.put('lobbyType', this.lobbyType);
         u.session = this.nextSession++;
+        u.lobbyCode = payload.lobby_code || this.lobbyCode;
         // lobby is live again — cancel the empty-lobby auto-close alarm
         void this.state.storage.deleteAlarm();
         this.persistUser(u);
@@ -318,6 +324,7 @@ export class LobbyRoom {
             unit_socket_id: u.socketId,
             is_creator: u.isCreator,
             lobbyType: this.lobbyType,
+            session: u.session,
           },
         });
         // original semantics: basemsg-new-connection goes ONLY to the new socket itself
@@ -332,7 +339,7 @@ export class LobbyRoom {
             creater_fake_id: this.creatorRealId || '',
           },
         });
-        this.pushUsersList();
+        this.pushUsersList(u.lobbyCode);
         // send current playback state so late joiners sync
         this.send(socketId, {
           type: 'basemsg-playback-sync',
@@ -365,8 +372,8 @@ export class LobbyRoom {
           state: 1,
           user_id: u.socketId,
           data: { name: u.alias, icon: u.icon || '' },
-        }, null);
-        this.pushUsersList();
+        }, null, u.lobbyCode);
+        this.pushUsersList(u.lobbyCode);
         return;
       }
 
@@ -377,7 +384,7 @@ export class LobbyRoom {
         // user_id = sender's SOCKET id — the original client dedupes its optimistic echo by
         // comparing user_id with its own unit_socket_id, so the echo MUST carry the socket id.
         this.send(socketId, { type: 'basemsg-chat', state: 1, user_id: u.socketId, data: { text: trimmed, to } });
-        this.sendTo({ type: 'basemsg-chat', state: 1, user_id: u.socketId, data: { text: trimmed, to } }, socketId);
+        this.sendTo({ type: 'basemsg-chat', state: 1, user_id: u.socketId, data: { text: trimmed, to } }, socketId, u.lobbyCode);
         return;
       }
 
@@ -392,7 +399,7 @@ export class LobbyRoom {
         for (const x of this.users.values()) x.ready = false; // re-gate playback for new content
         this.updatedAt = Date.now();
         await this.persistPlayback();
-        this.broadcast({ type: 'basemsg-change-vlink', state: 1, user_id: u.socketId, data: d }, null);
+        this.broadcast({ type: 'basemsg-change-vlink', state: 1, user_id: u.socketId, data: d }, null, u.lobbyCode);
         return;
       }
 
@@ -409,7 +416,7 @@ export class LobbyRoom {
         if (mode === 'shared' && d.fileName) this.sharedFileName = d.fileName;
         if ((mode === 'radio' || mode === 'webview' || mode === 'aparat') && d.url) this.currentUrl = d.url;
         await this.persistPlayback();
-        this.broadcast({ type: 'basemsg-change-mode', state: 1, user_id: u.socketId, data: d }, null);
+        this.broadcast({ type: 'basemsg-change-mode', state: 1, user_id: u.socketId, data: d }, null, u.lobbyCode);
         return;
       }
 
@@ -422,7 +429,7 @@ export class LobbyRoom {
         for (const x of this.users.values()) x.ready = false;
         this.updatedAt = Date.now();
         await this.persistPlayback();
-        this.broadcast({ type: 'basemsg-change-video', state: 1, user_id: u.socketId, data: d }, null);
+        this.broadcast({ type: 'basemsg-change-video', state: 1, user_id: u.socketId, data: d }, null, u.lobbyCode);
         return;
       }
 
@@ -432,7 +439,7 @@ export class LobbyRoom {
         this.currentTime = Number(msg.currentTime ?? (data as { currentTime?: number })?.currentTime ?? this.currentTime);
         this.updatedAt = Date.now();
         await this.state.storage.put('playing', this.playing);
-        this.broadcast({ type: 'basemsg-play-pause', user_id: u.socketId, data: isPlaying ? 'play' : 'pause', currentTime: this.currentTime }, socketId);
+        this.broadcast({ type: 'basemsg-play-pause', user_id: u.socketId, data: isPlaying ? 'play' : 'pause', currentTime: this.currentTime }, socketId, u.lobbyCode);
         return;
       }
 
@@ -441,7 +448,7 @@ export class LobbyRoom {
         this.currentTime = t;
         this.updatedAt = Date.now();
         await this.state.storage.put('currentTime', t);
-        this.broadcast({ type: 'basemsg-click-bar', user_id: u.socketId, data: { currentTime: t } }, socketId);
+        this.broadcast({ type: 'basemsg-click-bar', user_id: u.socketId, data: { currentTime: t } }, socketId, u.lobbyCode);
         return;
       }
 
@@ -452,7 +459,7 @@ export class LobbyRoom {
         if (typeof d.audioUrl === 'string' && d.audioUrl) this.currentUrl = d.audioUrl;
         this.updatedAt = Date.now();
         await this.state.storage.put('musicMeta', d);
-        this.broadcast({ type: 'basemsg-music-metadata', state: 1, user_id: u.socketId, data: d }, null);
+        this.broadcast({ type: 'basemsg-music-metadata', state: 1, user_id: u.socketId, data: d }, null, u.lobbyCode);
         return;
       }
 
@@ -460,7 +467,7 @@ export class LobbyRoom {
         const enabled = !!(data as { enabled?: boolean })?.enabled;
         u.micEnabled = enabled;
         this.persistUser(u);
-        this.broadcast({ type: 'basemsg-mic-status', state: 1, user_id: u.socketId, data: { enabled } }, null);
+        this.broadcast({ type: 'basemsg-mic-status', state: 1, user_id: u.socketId, data: { enabled } }, null, u.lobbyCode);
         return;
       }
 
@@ -471,9 +478,9 @@ export class LobbyRoom {
         const members = Array.from(this.users.values()).filter((x) => x.session > 0);
         const total = members.length;
         const ready = members.filter((x) => x.ready).length;
-        this.broadcast({ type: 'basemsg-ready-status', data: { ready_count: ready, total_count: total } }, null);
+        this.broadcast({ type: 'basemsg-ready-status', data: { ready_count: ready, total_count: total } }, null, u.lobbyCode);
         if (total > 0 && ready >= total) {
-          this.broadcast({ type: 'basemsg-all-ready', data: { ready_count: ready, total_count: total } }, null);
+          this.broadcast({ type: 'basemsg-all-ready', data: { ready_count: ready, total_count: total } }, null, u.lobbyCode);
         }
         return;
       }
@@ -496,10 +503,12 @@ export class LobbyRoom {
 
       case 'basemsg-close-lobby': {
         if (u.isCreator || u.realId === this.creatorRealId) {
-          this.broadcast({ type: 'basemsg-close-lobby', state: 1 }, null);
+          const closingLobby = u.lobbyCode || this.lobbyCode;
+          this.broadcast({ type: 'basemsg-close-lobby', state: 1 }, null, closingLobby);
           this.closed = true;
           await this.state.storage.put('closed', 1);
           for (const [sid, uu] of this.users) {
+            if ((uu.lobbyCode || '') !== closingLobby) continue; // never close other lobbies' sockets
             try { uu.ws?.close(1000, 'lobby closed'); } catch { /* noop */ }
             this.users.delete(sid);
           }
@@ -571,13 +580,15 @@ export class LobbyRoom {
     // rewrite sender session bytes to the server-assigned session
     const dv = new DataView(frame);
     dv.setUint32(1, u.session, false);
-    this.sendToBinary(frame, socketId);
+    this.sendToBinary(frame, socketId, u.lobbyCode);
   }
 
-  private sendToBinary(frame: ArrayBuffer, exceptSocketId: string | null): void {
+  private sendToBinary(frame: ArrayBuffer, exceptSocketId: string | null, lobby?: string): void {
     for (const [sid, u] of this.users) {
       if (sid === exceptSocketId) continue;
       if (!u.session) continue;
+      // lobby scoping — voice must never cross lobbies on the shared gate DO
+      if (lobby !== undefined && lobby !== null && (u.lobbyCode || '') !== lobby) continue;
       if (u.ws && u.ws.readyState === WebSocket.OPEN) {
         try { u.ws.send(frame); } catch { /* noop */ }
       }
@@ -591,11 +602,12 @@ export class LobbyRoom {
     if (u.ws) this.socketIds.delete(u.ws);
     this.users.delete(socketId);
     try { u.ws?.close(1000, 'exit'); } catch { /* noop */ }
-    const remaining = this.usersJson().map((x) => ({
+    const goneLobby = u.lobbyCode || '';
+    const remaining = this.usersJson(goneLobby).map((x) => ({
       user_id: x.user_id, real_id: x.real_id, username: x.username, email: x.username,
     }));
-    this.broadcast({ type: 'basemsg-exit-lobby', data: remaining }, null);
-    this.pushUsersList();
+    this.broadcast({ type: 'basemsg-exit-lobby', data: remaining }, null, goneLobby);
+    this.pushUsersList(goneLobby);
     if (socketId === this.creatorSocketId) {
       // creator socket changed (reconnect) — hand creator role to any remaining socket
       // of the same real user; only truly-empty or creator-abandoned lobbies close.

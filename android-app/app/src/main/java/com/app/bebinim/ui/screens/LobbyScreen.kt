@@ -111,8 +111,12 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import com.app.bebinim.R
 import com.app.bebinim.data.model.StickerCatalog
+import com.app.bebinim.data.utils.SoundPlayer
 import com.app.bebinim.data.websocket.ChatMessage
 import com.app.bebinim.data.websocket.ConnectionState
 import com.app.bebinim.data.websocket.LobbyUser
@@ -149,13 +153,54 @@ import kotlin.random.Random
 private const val LOBBY_ICON_BASE_URL = "https://app.bebinim.me/hw-assets/images/"
 private val EMOJIS = listOf("❤️", "😂", "🔥", "👍", "🎉")
 
-data class LobbyIconDef(val id: String, val label: String, val placeholderColor: Color)
-val LOBBY_ICONS = listOf(
-    LobbyIconDef("foxy", "فاکسی", Color(0xFFFF7043)),
-    LobbyIconDef("shipy", "شیپی", Color(0xFF42A5F5)),
-    LobbyIconDef("tems", "تمس", Color(0xFF66BB6A)),
-    LobbyIconDef("meymo", "میمو", Color(0xFFAB47BC))
+data class LobbyIconDef(
+    val id: String,
+    val label: String,
+    val placeholderColor: Color,
+    val res: Int? = null // local graphical avatar (null → remote fallback for legacy ids)
 )
+val LOBBY_ICONS = listOf(
+    LobbyIconDef("jojeh", "جوجه", Color(0xFFFDD835), R.drawable.avatar_jojeh),
+    LobbyIconDef("meymo", "میمون", Color(0xFFAB47BC), R.drawable.avatar_meymo),
+    LobbyIconDef("foxy", "فاکسی", Color(0xFFFF7043), R.drawable.avatar_foxy),
+    LobbyIconDef("shipy", "شیپی", Color(0xFF42A5F5), R.drawable.avatar_shipy),
+    LobbyIconDef("tems", "تمس", Color(0xFF66BB6A), R.drawable.avatar_tems),
+    LobbyIconDef("panda", "پاندا", Color(0xFFE0E0E0), R.drawable.avatar_panda),
+    LobbyIconDef("khargoosh", "خرگوش", Color(0xFFF48FB1), R.drawable.avatar_khargoosh),
+    LobbyIconDef("gorbeh", "گربه", Color(0xFFFFB74D), R.drawable.avatar_gorbeh)
+)
+
+/** Resolves a lobby icon id to a local graphical avatar drawable (null → not bundled). */
+fun lobbyIconRes(iconId: String?): Int? =
+    LOBBY_ICONS.firstOrNull { it.id == iconId }?.res
+
+/**
+ * Lobby avatar: prefers the bundled graphical avatar for known ids, falls back to the
+ * legacy remote image for anything else (old ids / old clients).
+ */
+@Composable
+fun LobbyAvatarImage(
+    iconId: String?,
+    contentDescription: String?,
+    modifier: Modifier = Modifier
+) {
+    val res = lobbyIconRes(iconId)
+    if (res != null) {
+        Image(
+            painter = painterResource(res),
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+        )
+    } else {
+        AsyncImage(
+            model = LOBBY_ICON_BASE_URL + (iconId ?: "foxy") + ".jpg",
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+        )
+    }
+}
 
 /**
  * Movie lobby room — full recreation of the original Bebinim lobby:
@@ -163,7 +208,7 @@ val LOBBY_ICONS = listOf(
  * modes, immersive chat with stickers & emoji blasts, voice chat, ready-sync,
  * onboarding guide and all management dialogs.
  */
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @UnstableApi
 @Composable
 fun LobbyScreen(
@@ -503,6 +548,7 @@ fun LobbyScreen(
             val last = messages.last()
             if (last.userId != currentUserId) {
                 floatingMessage = last
+                SoundPlayer.playMessageSound(context) // notification chime for incoming messages
                 delay(3200)
                 if (floatingMessage == last) floatingMessage = null
             } else {
@@ -600,13 +646,21 @@ fun LobbyScreen(
                             hasLocalFile = selectedVideoUri != null,
                             onPickFile = { videoPicker.launch("video/*") },
                             playerContent = {
-                                PlayerSurface(exoPlayer, sharedPlayerView, showController = true)
+                                PlayerSurface(
+                                    exoPlayer, sharedPlayerView,
+                                    showController = true,
+                                    controllerShowTimeoutMs = 4000 // tap shows; auto-hides after 4s while playing; tap hides
+                                )
                             }
                         )
                         "webview", "aparat" -> WebViewPlayer(url = currentVideoUrl)
                         else -> {
                             if (currentVideoUrl.isNotBlank()) {
-                                PlayerSurface(exoPlayer, sharedPlayerView, showController = true)
+                                PlayerSurface(
+                                    exoPlayer, sharedPlayerView,
+                                    showController = true,
+                                    controllerShowTimeoutMs = 4000 // tap shows; auto-hides after 4s while playing; tap hides
+                                )
                             } else {
                             Column(
                                 modifier = Modifier
@@ -1204,7 +1258,30 @@ private fun PlayerSurface(
                 setControllerShowTimeoutMs(controllerShowTimeoutMs)
                 setShowSubtitleButton(true)
                 subtitleView?.visibility = android.view.View.GONE
-                setControllerHideOnTouch(false)
+                // tap-to-toggle on the content frame: single tap on the video area hides the
+                // controls when visible and shows them when hidden (controller must NOT be
+                // hide-on-touch=false — that made taps a no-op while controls were visible)
+                val contentFrame = view.findViewById<android.view.View?>(
+                    androidx.media3.ui.R.id.exo_content_frame
+                )
+                if (contentFrame != null && showController) {
+                    val detector = android.view.GestureDetector(
+                        view.context,
+                        object : android.view.GestureDetector.SimpleOnGestureListener() {
+                            override fun onSingleTapUp(e: android.view.MotionEvent): Boolean {
+                                if (!view.useController) return true
+                                if (view.isControllerVisible) view.hideController() else view.showController()
+                                return true
+                            }
+                        }
+                    )
+                    contentFrame.setOnTouchListener { _, ev ->
+                        detector.onTouchEvent(ev)
+                        true
+                    }
+                } else {
+                    contentFrame?.setOnTouchListener(null)
+                }
                 if (onControllerVisibility != null) {
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
@@ -1351,10 +1428,9 @@ private fun UserChipHorizontal(user: LobbyUser, iconId: String?, micOn: Boolean)
                 contentAlignment = Alignment.Center
             ) {
                 if (!iconId.isNullOrBlank()) {
-                    AsyncImage(
-                        model = LOBBY_ICON_BASE_URL + iconId + ".jpg",
+                    LobbyAvatarImage(
+                        iconId = iconId,
                         contentDescription = user.displayName,
-                        contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -1491,10 +1567,9 @@ private fun MessageItem(message: ChatMessage, currentUserId: String, iconId: Str
                 contentAlignment = Alignment.Center
             ) {
                 if (!iconId.isNullOrBlank()) {
-                    AsyncImage(
-                        model = LOBBY_ICON_BASE_URL + iconId + ".jpg",
+                    LobbyAvatarImage(
+                        iconId = iconId,
                         contentDescription = null,
-                        contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -1666,10 +1741,9 @@ private fun FloatingMessageNotification(
                 .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            AsyncImage(
-                model = "https://app.bebinim.me/hw-assets/images/${iconId ?: "foxy"}.jpg",
+            LobbyAvatarImage(
+                iconId = iconId,
                 contentDescription = message.username,
-                contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize().clip(CircleShape)
             )
         }
@@ -1894,6 +1968,7 @@ private fun FullscreenPlayerOverlay(
 // welcome dialog with lobby icon picker (foxy/shipy/tems/meymo)
 // ================================================================
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AliasWelcomeDialog(
     aliasInput: String,
@@ -1926,7 +2001,10 @@ private fun AliasWelcomeDialog(
                 Spacer(Modifier.height(14.dp))
                 Text("آیکون لابی‌ات را انتخاب کن", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = WhiteText)
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     LOBBY_ICONS.forEach { def ->
                         val selected = selectedIconId == def.id
                         Column(
@@ -1948,10 +2026,9 @@ private fun AliasWelcomeDialog(
                                     .background(def.placeholderColor.copy(alpha = 0.25f)),
                                 contentAlignment = Alignment.Center
                             ) {
-                                AsyncImage(
-                                    model = LOBBY_ICON_BASE_URL + def.id + ".jpg",
+                                LobbyAvatarImage(
+                                    iconId = def.id,
                                     contentDescription = def.label,
-                                    contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -2442,10 +2519,9 @@ private fun UsersDialog(
                         ) {
                             val iconId = userIcons[user.userId]
                             if (!iconId.isNullOrBlank()) {
-                                AsyncImage(
-                                    model = LOBBY_ICON_BASE_URL + iconId + ".jpg",
+                                LobbyAvatarImage(
+                                    iconId = iconId,
                                     contentDescription = null,
-                                    contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             } else {
