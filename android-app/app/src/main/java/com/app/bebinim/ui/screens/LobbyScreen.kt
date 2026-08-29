@@ -81,6 +81,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -1060,7 +1061,7 @@ private fun PlayerSurface(exoPlayer: ExoPlayer, showController: Boolean) {
                 this.player = exoPlayer
                 useController = showController
                 setShowSubtitleButton(true)
-                subtitleView?.setViewVisibility(android.view.View.GONE)
+                subtitleView?.visibility = android.view.View.GONE
             }
         },
         update = { view -> view.useController = showController },
@@ -1453,7 +1454,10 @@ private fun MessageInputRow(
             modifier = Modifier
                 .size(42.dp)
                 .clip(CircleShape)
-                .background(if (messageText.isNotBlank()) ChatButtonGradient else Color(0xFF14243C))
+                .background(
+                    if (messageText.isNotBlank()) ChatButtonGradient
+                    else SolidColor(Color(0xFF14243C))
+                )
                 .clickable { if (messageText.isNotBlank()) onSendClick() },
             contentAlignment = Alignment.Center
         ) {
@@ -1775,7 +1779,7 @@ private fun PlaybackModeOption(
             .clip(RoundedCornerShape(14.dp))
             .background(
                 if (selected) Brush.verticalGradient(listOf(accent.copy(alpha = 0.15f), accent.copy(alpha = 0.08f)))
-                else Color(0xFF16213E)
+                else SolidColor(Color(0xFF16213E))
             )
             .border(
                 1.dp,
@@ -1955,7 +1959,7 @@ private fun VideoSettingsSheet(
                         .background(Color(0xFF16213E))
                         .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("پیش‌نمایش زیرنویس", fontSize = subtitleSize.sp, color = subtitleTextColor) }
+                ) { Text("پیش‌نمایش زیرنویس", fontSize = subtitleSize.sp, color = subtitleColor) }
                 Spacer(Modifier.width(12.dp))
                 Box(
                     modifier = Modifier

@@ -41,6 +41,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,6 +56,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -212,15 +215,18 @@ fun ImmersiveChatPanel(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(CircleShape)
-                    .background(if (messageText.isNotBlank()) ChatButtonGradient else PanelSurface)
+                    .background(
+                        if (messageText.isNotBlank()) ChatButtonGradient
+                        else SolidColor(PanelSurface)
+                    )
                     .clickable {
                         keyboard?.hide()
                         if (messageText.isNotBlank()) onSendMessage()
                     },
                 contentAlignment = Alignment.Center
             ) {
-                androidx.compose.material3.Icon(
-                    androidx.compose.material.icons.Icons.Filled.Send,
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
                     "ارسال",
                     tint = if (messageText.isNotBlank()) Color.White else Color.White.copy(alpha = 0.4f),
                     modifier = Modifier.size(20.dp)
@@ -431,7 +437,9 @@ fun FloatingMicButton(micEnabled: Boolean, onClick: () -> Unit, modifier: Modifi
             modifier = Modifier
                 .size(54.dp)
                 .clip(CircleShape)
-                .background(if (micEnabled) MicButtonGradient else PanelSurface)
+                .background(
+                    if (micEnabled) MicButtonGradient else SolidColor(PanelSurface)
+                )
                 .border(
                     2.dp,
                     if (micEnabled) Color.White.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.15f),
