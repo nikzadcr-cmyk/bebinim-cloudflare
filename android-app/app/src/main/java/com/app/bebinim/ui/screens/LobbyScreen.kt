@@ -1762,7 +1762,7 @@ private fun FullscreenPlayerOverlay(
                 Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
-                        androidx.compose.foundation.gestures.detectTapGestures {
+                        detectTapGestures {
                             iconsVisible = !iconsVisible
                         }
                     }

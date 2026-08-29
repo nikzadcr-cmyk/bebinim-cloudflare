@@ -218,7 +218,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
         // hardware echo-cancel + noise-suppression — without these the far end
         // hears loud hiss/noise ("صدای نویز شدید")
         try {
-            audioRecord?.sessionId?.let { sid ->
+            audioRecord?.audioSessionId?.let { sid ->
                 echoCanceler = AcousticEchoCanceler.create(sid)
                 noiseSuppressor = NoiseSuppressor.create(sid)
             }
