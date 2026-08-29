@@ -17,6 +17,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +62,9 @@ fun VideoPlayerScreen(navController: NavHostController, videoUrl: String) {
         }
     }
 
+    // apply incoming sync flag (declared before listener so it can be captured)
+    var isSyncing by remember { mutableStateOf(false) }
+
     val playerListener = remember {
         object : androidx.media3.common.Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -70,9 +74,7 @@ fun VideoPlayerScreen(navController: NavHostController, videoUrl: String) {
     }
     LaunchedEffect(exoPlayer) { exoPlayer.addListener(playerListener) }
 
-    // apply incoming sync
-    var isSyncing by remember { mutableStateOf(false) }
-    androidx.compose.runtime.LaunchedEffect(videoSyncState) {
+    LaunchedEffect(videoSyncState) {
         videoSyncState?.let { sync ->
             isSyncing = true
             exoPlayer.seekTo((sync.currentTime * 1000).toLong())

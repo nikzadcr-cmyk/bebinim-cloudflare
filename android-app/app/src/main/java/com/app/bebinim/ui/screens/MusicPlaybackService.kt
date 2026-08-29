@@ -48,7 +48,10 @@ class MusicPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        exoPlayer = ExoPlayer.Builder(this).build().apply {
+        exoPlayer = ExoPlayer.Builder(this)
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(androidx.media3.common.C.WAKE_MODE_NETWORK)
+            .build().apply {
             setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(androidx.media3.common.C.USAGE_MEDIA)
@@ -56,8 +59,6 @@ class MusicPlaybackService : Service() {
                     .build(),
                 true
             )
-            handleAudioBecomingNoisy = true
-            setWakeMode(androidx.media3.common.C.WAKE_MODE_NETWORK)
             addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     updateNotification()
