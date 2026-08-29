@@ -1,0 +1,111 @@
+name: Build APK & Release
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "android-app/**"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace --no-daemon
+
+      - name: Build Debug APK (fallback)
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Sign Release APK
+        run: |
+          BT=$(ls $ANDROID_HOME/build-tools/ | sort -V | tail -1)
+          BT_DIR=$ANDROID_HOME/build-tools/$BT
+          echo "Using build-tools: $BT"
+          # Generate a CI keystore
+          keytool -genkeypair -v -keystore bebinim-ci.jks -alias bebinim \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass bebinim12345 -keypass bebinim12345 \
+            -dname "CN=Bebinim, OU=CI, O=Bebinim, L=Internet, ST=Internet, C=IR"
+          # zipalign then sign
+          $BT_DIR/zipalign -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-aligned.apk
+          $BT_DIR/apksigner sign --ks bebinim-ci.jks --ks-key-alias bebinim \
+            --ks-pass pass:bebinim12345 --key-pass pass:bebinim12345 \
+            --out bebinim-v1.5.apk app-release-aligned.apk
+          $BT_DIR/apksigner verify --print-certs bebinim-v1.5.apk || true
+          ls -la bebinim-v1.5.apk app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bebinim-apks
+          path: |
+            android-app/bebinim-v1.5.apk
+            android-app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Delete existing release (idempotent)
+        run: |
+          gh release delete v1.5 --yes 2>/dev/null || true
+          git push origin :refs/tags/v1.5 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.5
+          name: bebinim v1.5 (Jetpack Compose + Cloudflare Workers)
+          body: |
+            ## 🚀 bebinim v1.5 — بازسازی کامل
+
+            اپ **ببینیم** بازسازی‌شده با **Jetpack Compose** + بک‌اند **Cloudflare Workers**
+
+            ### ✨ امکانات
+            - 🔐 ورود/ثبت‌نام (رمز + OTP)
+            - 🎬 لابی تماشای گروهی ویدیو با سینک لحظه‌ای
+            - 🎵 لابی موزیک با حالت رادیو
+            - 💬 چت زنده لابی + چت صوتی
+            - 🏆 رتبه‌بندی کاربران
+            - 💎 پلن‌های اشتراک
+            - 👤 پروفایل کاربری
+
+            ### 🗑 حذف‌شده طبق درخواست
+            - ❌ بخش آرشیو فیلم‌ها
+            - ❌ بخش پشتیبانی (تیکت‌ها)
+
+            ### 📦 فایل‌ها
+            - `bebinim-v1.5.apk` — ریلیز امضاشده (نصب روی دستگاه اندروید)
+            - `app-debug.apk` — نسخه دیباگ
+          files: |
+            android-app/bebinim-v1.5.apk
+            android-app/app/build/outputs/apk/debug/app-debug.apk
+          draft: false
+          prerelease: false
