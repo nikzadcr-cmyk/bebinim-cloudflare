@@ -157,6 +157,7 @@ class WebSocketManager private constructor() {
 
     private var webSocket: WebSocket? = null
     private var authToken: String = ""
+    private var lobbyToken: String = "" // stored so a reconnect can re-join the same lobby
     private var hasJoinedLobby = false
     private var reconnectAttempts = 0
     private var isReconnecting = false
@@ -178,7 +179,10 @@ class WebSocketManager private constructor() {
         _isVerified.value = false
         if (!isReconnecting) hasJoinedLobby = false
 
-        val request = Request.Builder().url(WS_URL).build()
+        // token rides in the URL: the worker pre-parses it and routes the socket to the
+        // per-lobby Durable Object (one isolated room per lobby code — like the original server).
+        val url = "$WS_URL?token=" + java.net.URLEncoder.encode(token, "UTF-8")
+        val request = Request.Builder().url(url).build()
         webSocket = client.newWebSocket(request, listener)
     }
 
@@ -254,6 +258,7 @@ class WebSocketManager private constructor() {
         try { webSocket?.close(1000, "User disconnected") } catch (_: Exception) {}
         webSocket = null
         authToken = ""
+        lobbyToken = ""
         handleDisconnect()
     }
 
@@ -272,10 +277,12 @@ class WebSocketManager private constructor() {
         _joinSuccess.value = ""
         _sharedFileName.value = ""
         hasJoinedLobby = false
+        lobbyToken = ""
     }
 
     // ---------------- outbound (exact protocol) ----------------
     fun sendLobbyToken(token: String) {
+        lobbyToken = token
         send(JSONObject().apply { put("type", "basemsg-join-to-lobby"); put("data", token) })
         hasJoinedLobby = true
     }
@@ -463,6 +470,11 @@ class WebSocketManager private constructor() {
             "verify-result" -> {
                 if (state == 1) {
                     _isVerified.value = true
+                    // mid-lobby reconnect: re-join the lobby on the fresh socket so the server
+                    // re-registers us (playback sync, users list, chat) — like a fresh join.
+                    if (hasJoinedLobby && lobbyToken.isNotBlank() && _lobbyInfo.value != null) {
+                        sendLobbyToken(lobbyToken)
+                    }
                 } else {
                     val msg = obj.optString("msg", "")
                     if (msg == "device-limit-exceeded") {
@@ -612,7 +624,8 @@ class WebSocketManager private constructor() {
                     list.add(
                         LobbyUser(
                             userId = uid, realId = realId, username = username,
-                            displayName = alias.ifBlank { username }, isHost = i == 0
+                            displayName = alias.ifBlank { username },
+                            isHost = u.optBoolean("is_creator", false) || u.optBoolean("isHost", false)
                         )
                     )
                 }

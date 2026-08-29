@@ -318,18 +318,26 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     if (!a) return err('unauthorized', 401);
     const rows = await env.DB.prepare(
       `SELECT l.*, u.name as creator_name FROM lobbies l LEFT JOIN users u ON u.id = l.creator_id
-       WHERE l.closed = 0 ORDER BY l.created_at DESC LIMIT 30`
-    ).all<any>();
+       WHERE l.closed = 0 AND l.created_at > ? ORDER BY l.created_at DESC LIMIT 50`
+    ).bind(nowSec() - 43200).all<any>();
     const lobbies = [];
     for (const l of rows.results) {
       const id = env.LOBBY.idFromName('lb2:' + l.code);
       const stub = env.LOBBY.get(id);
       let users: Array<{ user_id: string; username: string }> = [];
+      let alive = false;
       try {
         const info = await stub.fetch(new Request('https://do/info'));
         const j: any = await info.json();
-        if (!j.closed) users = (j.userList || []).map((x: any) => ({ user_id: x.user_id, username: x.alias || x.username || 'کاربر' }));
-      } catch { /* DO unreachable */ }
+        if (!j.closed && (j.userList || []).length > 0) {
+          alive = true;
+          users = (j.userList || []).map((x: any) => ({ user_id: x.user_id, username: x.alias || x.username || 'کاربر' }));
+        } else if (j.closed) {
+          // DO says closed → keep D1 row consistent so it never shows again
+          await env.DB.prepare('UPDATE lobbies SET closed = 1 WHERE code = ?').bind(l.code).run();
+        }
+      } catch { /* DO unreachable → treat as dead */ }
+      if (!alive) continue; // only TRULY active lobbies are listed
       lobbies.push({
         code: l.code,
         creater: l.creator_name || l.creator_id,

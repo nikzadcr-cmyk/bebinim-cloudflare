@@ -73,6 +73,11 @@ fun CreateJoinLobbyScreen(
     LaunchedEffect(Unit) {
         lobbyViewModel.clearState()
         lobbyViewModel.fetchActiveLobbies()
+        // keep the list fresh: dead lobbies drop out as soon as they close
+        while (true) {
+            delay(15000)
+            lobbyViewModel.fetchActiveLobbies(silent = true)
+        }
     }
 
     // navigate to lobby after successful join/create
@@ -229,9 +234,23 @@ fun CreateJoinLobbyScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        // active lobbies
+        // active lobbies (only live ones — server filters dead lobbies out)
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("لابی‌های فعال شما", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFE0E6F0))
+            Box(
+                Modifier.size(8.dp).background(Color(0xFF1DB954), RoundedCornerShape(50))
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("لابی‌های فعال", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFE0E6F0))
+            if (activeLobbies.isNotEmpty()) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "${activeLobbies.size}",
+                    fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1DB954),
+                    modifier = Modifier
+                        .background(Color(0xFF1DB954).copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                )
+            }
             Spacer(Modifier.weight(1f))
             if (activeLobbiesLoading) {
                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFF4A9EFF))
@@ -240,12 +259,21 @@ fun CreateJoinLobbyScreen(
         Spacer(Modifier.height(10.dp))
 
         if (activeLobbies.isEmpty() && !activeLobbiesLoading) {
-            Text(
-                "لابی فعالی وجود ندارد — یکی بساز!",
-                fontSize = 12.sp,
-                color = Color(0xFF718096),
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0E1928).copy(alpha = 0.6f)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1E2A44))
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("هنوز لابی فعالی نیست", fontSize = 13.sp, color = Color(0xFF8FA0B8))
+                    Spacer(Modifier.height(4.dp))
+                    Text("یک لابی بساز یا با کد وارد شو", fontSize = 11.sp, color = Color(0xFF5A6B84))
+                }
+            }
         }
 
         activeLobbies.forEach { lobby ->
@@ -320,40 +348,95 @@ private fun ActiveLobbyCard(
     isJoining: Boolean,
     onClick: () -> Unit
 ) {
+    val isMusic = lobby.lobbyType == "music"
+    val accent = if (isMusic) Color(0xFF1DB954) else Color(0xFFFF8A00)
+    val memberCount = lobby.users.size
+
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF0E1928))
+        enabled = !isJoining,
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0E1928)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.30f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // type badge
+            Box(
+                Modifier
+                    .size(46.dp)
+                    .background(accent.copy(alpha = 0.14f), RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    androidx.compose.ui.res.painterResource(if (isMusic) com.app.bebinim.R.drawable.ic_music_note else com.app.bebinim.R.drawable.ic_movie),
+                    null,
+                    tint = accent,
+                    modifier = Modifier.size(23.dp)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(lobby.code, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    Spacer(Modifier.width(8.dp))
                     Text(
-                        if (lobby.lobbyType == "music") "لابی موزیک" else "لابی فیلم",
-                        fontSize = 12.sp, color = Color(0xFF718096)
+                        lobby.code,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        letterSpacing = 1.5.sp
                     )
+                    Spacer(Modifier.width(8.dp))
+                    // live pulse dot
+                    Box(
+                        Modifier
+                            .size(7.dp)
+                            .background(Color(0xFF1DB954), RoundedCornerShape(50))
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("لایو", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1DB954))
                     if (lobby.is_owner) {
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text(
-                            "سازنده", fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                            color = Color(0xFFFF8A00),
-                            modifier = Modifier.background(Color(0xFFFF8A00).copy(alpha = 0.12f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
+                            "لابی شما",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = accent,
+                            modifier = Modifier
+                                .background(accent.copy(alpha = 0.13f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.People, null, tint = Color(0xFF718096), modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("${lobby.users.size} نفر", fontSize = 12.sp, color = Color(0xFF718096))
+                    Text(
+                        if (memberCount > 0) "$memberCount نفر داخل لابی" else "منتظر اعضا...",
+                        fontSize = 12.sp, color = Color(0xFF8FA0B8)
+                    )
+                    if (isMusic) {
+                        Spacer(Modifier.width(8.dp))
+                        Text("·", fontSize = 12.sp, color = Color(0xFF718096))
+                        Spacer(Modifier.width(8.dp))
+                        Text("موزیک", fontSize = 12.sp, color = Color(0xFF1DB954))
+                    }
                 }
             }
             if (isJoining) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color(0xFF4A9EFF))
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = accent)
             } else {
-                Text("پیوستن", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF4A9EFF))
+                Box(
+                    Modifier
+                        .background(accent.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                ) {
+                    Text("پیوستن", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = accent)
+                }
             }
         }
     }

@@ -274,6 +274,8 @@ fun LobbyScreen(
                         .setMediaMetadata(MediaMetadata.Builder().setTitle(selectedVideoFileName).build())
                         .setSubtitleConfigurations(buildSubtitleConfigs(subtitleInfo, selectedSubtitleUri, context))
                         .build()
+                    hasSentReady = false
+                    pendingPlayState = true // play once every member's player is ready
                     exoPlayer.setMediaItem(item)
                     exoPlayer.prepare()
                 }
@@ -286,15 +288,37 @@ fun LobbyScreen(
                     val builder = MediaItem.Builder().setUri(currentVideoUrl)
                     val subs = buildSubtitleConfigs(subtitleInfo, selectedSubtitleUri, context)
                     if (subs.isNotEmpty()) builder.setSubtitleConfigurations(subs)
-                    exoPlayer.setMediaItem(builder.build())
-                    exoPlayer.prepare()
-                    if (shouldAutoPlay) exoPlayer.playWhenReady = true
+                    hasSentReady = false
+                    if (shouldAutoPlay) {
+                        // radio streams start immediately (original heuristic)
+                        pendingPlayState = null
+                        exoPlayer.setMediaItem(builder.build())
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = true
+                    } else {
+                        // original: load paused, start when ALL members are ready (or via escape button)
+                        pendingPlayState = true
+                        exoPlayer.setMediaItem(builder.build())
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = false
+                    }
                 } else {
                     exoPlayer.stop()
                     exoPlayer.clearMediaItems()
                     playerReady = false
                     hasSentReady = false
+                    pendingPlayState = null
                 }
+            }
+        }
+    }
+
+    // all members ready → start pending playback (original waitingForAllReady flow)
+    LaunchedEffect(allUsersReady) {
+        if (allUsersReady && pendingPlayState == true) {
+            pendingPlayState = null
+            if (currentMode == "link" || currentMode == "shared") {
+                exoPlayer.playWhenReady = true
             }
         }
     }
@@ -335,8 +359,11 @@ fun LobbyScreen(
                             lobbyViewModel.sendPlayerReady(lobbyCode)
                         }
                         pendingPlayState?.let { pending ->
-                            exoPlayer.playWhenReady = pending
-                            pendingPlayState = null
+                            // if everyone was already ready before this media loaded, start now
+                            if (allUsersReady) {
+                                pendingPlayState = null
+                                exoPlayer.playWhenReady = pending
+                            }
                         }
                     }
                     Player.STATE_BUFFERING -> {
@@ -344,6 +371,15 @@ fun LobbyScreen(
                     }
                     Player.STATE_IDLE, Player.STATE_ENDED -> Unit
                 }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                playerReady = false
+                android.widget.Toast.makeText(
+                    context,
+                    "خطا در پخش: ${error.errorCodeName}. لینک را بررسی کنید",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -473,9 +509,21 @@ fun LobbyScreen(
                 videoLink = videoLinkText,
                 onVideoLinkChange = { videoLinkText = it },
                 onSubmit = {
-                    if (videoLinkText.isNotBlank()) {
-                        lobbyViewModel.sendVideoLink(videoLinkText.trim())
-                        videoLinkText = ""
+                    // exact original submit logic (LobbyScreen$44$lambda$8$lambda$7):
+                    // http:// rejected with toast; otherwise clear → set locally → broadcast
+                    val link = videoLinkText.trim()
+                    if (link.isNotBlank()) {
+                        if (link.startsWith("http://", ignoreCase = true)) {
+                            android.widget.Toast.makeText(
+                                context, "لینک HTTP پشتیبانی نمی\u200cشود — از HTTPS استفاده کنید",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            lobbyViewModel.clearPlayer()
+                            lobbyViewModel.updateVideoUrl(link)
+                            lobbyViewModel.sendVideoLink(link)
+                            videoLinkText = ""
+                        }
                     }
                 },
                 currentMode = currentMode,
@@ -565,8 +613,9 @@ fun LobbyScreen(
                     )
                 }
 
-                // buffering / waiting-for-ready overlay
-                val showReadyOverlay = !allUsersReady && readyStatus != null &&
+                // buffering / waiting-for-ready overlay (only while real content is loaded)
+                val hasContentLoaded = if (currentMode == "shared") selectedVideoUri != null else currentVideoUrl.isNotBlank()
+                val showReadyOverlay = hasContentLoaded && !allUsersReady && readyStatus != null &&
                     (readyStatus?.readyCount ?: 0) < (readyStatus?.totalCount ?: 1)
                 if (showReadyOverlay) {
                     Surface2(
@@ -587,6 +636,8 @@ fun LobbyScreen(
                             )
                             TextButton(onClick = {
                                 lobbyViewModel.sendPlayerReady(lobbyCode)
+                                pendingPlayState = null
+                                exoPlayer.playWhenReady = true
                             }) { Text("شروع بدون انتظار", fontSize = 11.sp, color = CyanAccent) }
                         }
                     }

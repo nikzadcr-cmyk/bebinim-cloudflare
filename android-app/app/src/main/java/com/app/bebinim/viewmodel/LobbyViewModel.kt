@@ -166,9 +166,9 @@ class LobbyViewModel : ViewModel() {
     }
 
     // ---------------- active lobbies ----------------
-    fun fetchActiveLobbies() {
+    fun fetchActiveLobbies(silent: Boolean = false) {
         viewModelScope.launch {
-            _activeLobbiesLoading.value = true
+            if (!silent) _activeLobbiesLoading.value = true
             try {
                 val token = tokenManager.getToken() ?: return@launch
                 val response = RetrofitClient.apiService.getActiveLobbies("Bearer $token")
@@ -178,7 +178,7 @@ class LobbyViewModel : ViewModel() {
                 }
             } catch (_: Exception) {
             } finally {
-                _activeLobbiesLoading.value = false
+                if (!silent) _activeLobbiesLoading.value = false
             }
         }
     }
@@ -202,7 +202,8 @@ class LobbyViewModel : ViewModel() {
     fun sendSubtitle(url: String, language: String = "fa", label: String = "فارسی") =
         webSocketManager.sendSubtitle(url, language, label)
     fun clearPlayer() {
-        webSocketManager.lobbyInfo.value?.code?.let { sendVideoLink("") }
+        // original clearPlayer is LOCAL ONLY (resets url + pending sync, sends nothing)
+        webSocketManager.clearPlayer()
     }
 
     fun exitLobby() {

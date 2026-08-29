@@ -64,6 +64,7 @@ export class LobbyRoom {
   private sharedFileName: string | null = null;
   private nextSession = 1;
   private voiceCred: VoiceCred | null = null;
+  private hydrated = false;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -106,6 +107,7 @@ export class LobbyRoom {
       return new Response('closed');
     }
     if (url.pathname === '/info') {
+      this.hydrate();
       return new Response(JSON.stringify({
         code: this.lobbyCode, type: this.lobbyType, users: this.users.size, closed: this.closed,
         userList: Array.from(this.users.values()).map((u) => ({ user_id: u.userId, alias: u.alias, username: u.username })),
@@ -115,6 +117,7 @@ export class LobbyRoom {
   }
 
   private handleUpgrade(request: Request): Response {
+    this.hydrate(); // this instance may have woken from hibernation — restore existing sockets first
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -128,14 +131,57 @@ export class LobbyRoom {
     };
     this.users.set(socketId, user);
     this.socketIds.set(server, socketId);
+    this.hydrated = true; // maps are now authoritative
 
-    // Hibernating WebSocket API — reliable event delivery (classic addEventListener never fired)
+    // Hibernating WebSocket API — the DO can hibernate between messages, so persist
+    // the per-socket identity in the socket attachment and rebuild maps on wake.
+    server.serializeAttachment({
+      socketId, realId: '', userId: '', alias: '', icon: '', username: '',
+      isCreator: false, ready: false, micEnabled: false, session: 0,
+    });
     this.state.acceptWebSocket(server);
     // return the CLIENT end in the 101 response; the accepted (server) end stays inside the DO
 
     // pre-verify the query token if present; in-band verify also supported
     if (token) { void this.tryVerify(socketId, token); }
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * Rebuild in-memory maps after a hibernation wake. When the runtime evicts the DO,
+   * all plain fields reset — but accepted WebSockets survive and keep their serialized
+   * attachments. Without this, every message after hibernation was silently dropped
+   * (the "connection drops / messages never arrive" bug).
+   */
+  private hydrate(): void {
+    if (this.hydrated) return;
+    for (const ws of this.state.getWebSockets()) {
+      try {
+        const a = ws.deserializeAttachment() as Partial<LobbyUser> | null;
+        if (!a?.socketId) continue;
+        const existing = this.users.get(a.socketId);
+        if (existing) { existing.ws = ws; this.socketIds.set(ws, a.socketId); continue; }
+        this.users.set(a.socketId, {
+          socketId: a.socketId, realId: a.realId || '', userId: a.realId || '',
+          alias: a.alias || '', icon: a.icon || '', username: a.username || '',
+          isCreator: !!a.isCreator, ws, ready: !!a.ready, micEnabled: !!a.micEnabled,
+          session: a.session || 0, lastSeen: Date.now(),
+        });
+        this.socketIds.set(ws, a.socketId);
+        if (a.isCreator && !this.creatorSocketId) this.creatorSocketId = a.socketId;
+      } catch { /* skip broken socket */ }
+    }
+    this.hydrated = true;
+  }
+
+  private persistUser(u: LobbyUser): void {
+    try {
+      u.ws?.serializeAttachment({
+        socketId: u.socketId, realId: u.realId, userId: u.userId, alias: u.alias,
+        icon: u.icon, username: u.username, isCreator: u.isCreator,
+        ready: u.ready, micEnabled: u.micEnabled, session: u.session,
+      });
+    } catch { /* noop */ }
   }
 
   private async tryVerify(socketId: string, token: string): Promise<void> {
@@ -161,6 +207,7 @@ export class LobbyRoom {
     await this.state.storage.put('code', this.lobbyCode);
     await this.state.storage.put('lobbyType', this.lobbyType);
     if (u.isCreator) await this.state.storage.put('creator', u.realId);
+    this.persistUser(u);
     this.send(socketId, { type: 'verify-result', state: 1, msg: 'ok' });
   }
 
@@ -185,7 +232,7 @@ export class LobbyRoom {
 
   private usersJson(): Array<Record<string, unknown>> {
     return Array.from(this.users.values()).map((u) => ({
-      user_id: u.userId,
+      user_id: u.socketId,   // client-facing id = socket id (original namespace)
       real_id: u.realId,
       alias: u.alias || u.username || 'کاربر',
       username: u.alias || u.username || 'نامشخص',
@@ -201,8 +248,9 @@ export class LobbyRoom {
 
   // ---------- WS message handling ----------
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    this.hydrate();
     const socketId = this.socketIds.get(ws);
-    if (!socketId) return;
+    if (!socketId) { console.log('DO-MSG unknown socket'); return; }
     const u = this.users.get(socketId);
     if (!u) return;
     u.lastSeen = Date.now();
@@ -254,6 +302,9 @@ export class LobbyRoom {
         await this.state.storage.put('code', this.lobbyCode);
         await this.state.storage.put('lobbyType', this.lobbyType);
         u.session = this.nextSession++;
+        // lobby is live again — cancel the empty-lobby auto-close alarm
+        void this.state.storage.deleteAlarm();
+        this.persistUser(u);
 
         this.send(socketId, {
           type: 'basemsg-join-to-lobby',
@@ -265,8 +316,10 @@ export class LobbyRoom {
             lobbyType: this.lobbyType,
           },
         });
-        // tell everyone a new user joined
-        this.sendTo({
+        // original semantics: basemsg-new-connection goes ONLY to the new socket itself
+        // (the client learns its own socket id + creator from it). Existing members just
+        // get the refreshed users list — otherwise they would overwrite their own id.
+        this.send(socketId, {
           type: 'basemsg-new-connection',
           data: {
             code: this.lobbyCode,
@@ -274,7 +327,7 @@ export class LobbyRoom {
             creater: this.creatorSocketId || '',
             creater_fake_id: this.creatorRealId || '',
           },
-        }, socketId);
+        });
         this.pushUsersList();
         // send current playback state so late joiners sync
         this.send(socketId, {
@@ -301,10 +354,12 @@ export class LobbyRoom {
         const name = d0.name || '';
         u.alias = String(name).slice(0, 30) || 'کاربر';
         if (typeof d0.icon === 'string' && d0.icon) u.icon = String(d0.icon).slice(0, 30);
+        this.persistUser(u);
+        // user_id = SOCKET id — the client namespaces displayNames/users by socket id
         this.broadcast({
           type: 'basemsg-alias',
           state: 1,
-          user_id: u.userId,
+          user_id: u.socketId,
           data: { name: u.alias, icon: u.icon || '' },
         }, null);
         this.pushUsersList();
@@ -315,9 +370,10 @@ export class LobbyRoom {
         const text = (data as { text?: string })?.text ?? '';
         const to = (data as { to?: string | null })?.to ?? null;
         const trimmed = String(text).slice(0, 500);
-        // echo to sender (with state+user_id like original server), broadcast to others
-        this.send(socketId, { type: 'basemsg-chat', state: 1, user_id: u.userId, data: { text: trimmed, to } });
-        this.sendTo({ type: 'basemsg-chat', state: 1, user_id: u.userId, data: { text: trimmed, to } }, socketId);
+        // user_id = sender's SOCKET id — the original client dedupes its optimistic echo by
+        // comparing user_id with its own unit_socket_id, so the echo MUST carry the socket id.
+        this.send(socketId, { type: 'basemsg-chat', state: 1, user_id: u.socketId, data: { text: trimmed, to } });
+        this.sendTo({ type: 'basemsg-chat', state: 1, user_id: u.socketId, data: { text: trimmed, to } }, socketId);
         return;
       }
 
@@ -325,12 +381,14 @@ export class LobbyRoom {
         const d = data as { nlink?: string; url?: string; type?: string; vcurrenttime?: number; name?: string; movieId?: string };
         const url = d.nlink || d.url || '';
         const linkType = d.type || 'link';
-        this.currentUrl = url || this.currentUrl;
+        if (url) this.currentUrl = url;
         this.currentMode = ['aparat', 'shared', 'archive', 'radio', 'webview'].includes(linkType) ? linkType : 'link';
         this.currentTime = Number(d.vcurrenttime || 0);
+        this.playing = false; // fresh content always starts paused; clients auto-play on load
+        for (const x of this.users.values()) x.ready = false; // re-gate playback for new content
         this.updatedAt = Date.now();
         await this.persistPlayback();
-        this.broadcast({ type: 'basemsg-change-vlink', state: 1, user_id: u.userId, data: d }, null);
+        this.broadcast({ type: 'basemsg-change-vlink', state: 1, user_id: u.socketId, data: d }, null);
         return;
       }
 
@@ -340,12 +398,14 @@ export class LobbyRoom {
         if (mode !== this.currentMode) {
           this.currentMode = mode;
           this.currentTime = 0;
+          this.playing = false;
+          for (const x of this.users.values()) x.ready = false;
           this.updatedAt = Date.now();
         }
         if (mode === 'shared' && d.fileName) this.sharedFileName = d.fileName;
         if ((mode === 'radio' || mode === 'webview' || mode === 'aparat') && d.url) this.currentUrl = d.url;
         await this.persistPlayback();
-        this.broadcast({ type: 'basemsg-change-mode', state: 1, user_id: u.userId, data: d }, null);
+        this.broadcast({ type: 'basemsg-change-mode', state: 1, user_id: u.socketId, data: d }, null);
         return;
       }
 
@@ -354,9 +414,11 @@ export class LobbyRoom {
         this.currentMode = d.type || 'archive';
         this.currentUrl = d.url || '';
         this.currentTime = 0;
+        this.playing = false;
+        for (const x of this.users.values()) x.ready = false;
         this.updatedAt = Date.now();
         await this.persistPlayback();
-        this.broadcast({ type: 'basemsg-change-video', state: 1, user_id: u.userId, data: d }, null);
+        this.broadcast({ type: 'basemsg-change-video', state: 1, user_id: u.socketId, data: d }, null);
         return;
       }
 
@@ -366,7 +428,7 @@ export class LobbyRoom {
         this.currentTime = Number(msg.currentTime ?? (data as { currentTime?: number })?.currentTime ?? this.currentTime);
         this.updatedAt = Date.now();
         await this.state.storage.put('playing', this.playing);
-        this.broadcast({ type: 'basemsg-play-pause', user_id: u.userId, data: isPlaying ? 'play' : 'pause', currentTime: this.currentTime }, socketId);
+        this.broadcast({ type: 'basemsg-play-pause', user_id: u.socketId, data: isPlaying ? 'play' : 'pause', currentTime: this.currentTime }, socketId);
         return;
       }
 
@@ -375,7 +437,7 @@ export class LobbyRoom {
         this.currentTime = t;
         this.updatedAt = Date.now();
         await this.state.storage.put('currentTime', t);
-        this.broadcast({ type: 'basemsg-click-bar', user_id: u.userId, data: { currentTime: t } }, socketId);
+        this.broadcast({ type: 'basemsg-click-bar', user_id: u.socketId, data: { currentTime: t } }, socketId);
         return;
       }
 
@@ -386,23 +448,27 @@ export class LobbyRoom {
         if (typeof d.audioUrl === 'string' && d.audioUrl) this.currentUrl = d.audioUrl;
         this.updatedAt = Date.now();
         await this.state.storage.put('musicMeta', d);
-        this.broadcast({ type: 'basemsg-music-metadata', state: 1, user_id: u.userId, data: d }, null);
+        this.broadcast({ type: 'basemsg-music-metadata', state: 1, user_id: u.socketId, data: d }, null);
         return;
       }
 
       case 'basemsg-mic-status': {
         const enabled = !!(data as { enabled?: boolean })?.enabled;
         u.micEnabled = enabled;
-        this.broadcast({ type: 'basemsg-mic-status', state: 1, user_id: u.userId, data: { enabled } }, null);
+        this.persistUser(u);
+        this.broadcast({ type: 'basemsg-mic-status', state: 1, user_id: u.socketId, data: { enabled } }, null);
         return;
       }
 
       case 'basemsg-player-ready': {
         u.ready = true;
-        const total = this.users.size;
-        const ready = Array.from(this.users.values()).filter((x) => x.ready).length;
+        this.persistUser(u);
+        // only sockets that actually joined the lobby count towards readiness
+        const members = Array.from(this.users.values()).filter((x) => x.session > 0);
+        const total = members.length;
+        const ready = members.filter((x) => x.ready).length;
         this.broadcast({ type: 'basemsg-ready-status', data: { ready_count: ready, total_count: total } }, null);
-        if (ready >= total && total > 0) {
+        if (total > 0 && ready >= total) {
           this.broadcast({ type: 'basemsg-all-ready', data: { ready_count: ready, total_count: total } }, null);
         }
         return;
@@ -432,6 +498,18 @@ export class LobbyRoom {
           for (const [sid, uu] of this.users) {
             try { uu.ws?.close(1000, 'lobby closed'); } catch { /* noop */ }
             this.users.delete(sid);
+          }
+        }
+        return;
+      }
+
+      case 'basemsg-kick-user': {
+        // host-only convenience (same id namespace as the users list: socket ids)
+        if (u.isCreator || u.realId === this.creatorRealId) {
+          const target = String((data as { user_id?: string })?.user_id || '');
+          if (target && this.users.has(target)) {
+            this.send(target, { type: 'basemsg-close-lobby', state: 1, msg: 'kicked' });
+            this.removeUser(target);
           }
         }
         return;
@@ -503,6 +581,7 @@ export class LobbyRoom {
   }
 
   private removeUser(socketId: string): void {
+    this.hydrate();
     const u = this.users.get(socketId);
     if (!u) return;
     if (u.ws) this.socketIds.delete(u.ws);
@@ -513,21 +592,39 @@ export class LobbyRoom {
     }));
     this.broadcast({ type: 'basemsg-exit-lobby', data: remaining }, null);
     this.pushUsersList();
-    // if creator left → close lobby
     if (socketId === this.creatorSocketId) {
-      this.broadcast({ type: 'basemsg-close-lobby', state: 1 }, null);
+      // creator socket changed (reconnect) — hand creator role to any remaining socket
+      // of the same real user; only truly-empty or creator-abandoned lobbies close.
+      const sameUser = Array.from(this.users.values()).find((x) => x.realId === u.realId);
+      if (sameUser) {
+        sameUser.isCreator = true;
+        this.creatorSocketId = sameUser.socketId;
+      } else {
+        this.creatorSocketId = null;
+      }
+    }
+    // empty lobby → auto-close after a 60s grace period (survives brief reconnects)
+    if (this.users.size === 0 && !this.closed) {
+      void this.state.storage.setAlarm(Date.now() + 60_000);
+    }
+  }
+
+  async webSocketAlarm(): Promise<void> {
+    this.hydrate();
+    if (this.users.size === 0 && !this.closed) {
       this.closed = true;
-      for (const [, uu] of this.users) { try { uu.ws?.close(1000, 'host left'); } catch { /* noop */ } }
-      this.users.clear();
+      await this.state.storage.put('closed', 1);
     }
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
+    this.hydrate();
     const socketId = this.socketIds.get(ws);
     if (socketId) { this.socketIds.delete(ws); this.removeUser(socketId); }
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
+    this.hydrate();
     const socketId = this.socketIds.get(ws);
     if (socketId) { this.socketIds.delete(ws); this.removeUser(socketId); }
   }
