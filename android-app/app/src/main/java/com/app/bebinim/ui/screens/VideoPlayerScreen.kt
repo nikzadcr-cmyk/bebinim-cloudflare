@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.People
@@ -25,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -108,12 +111,24 @@ fun VideoPlayerScreen(navController: NavHostController, videoUrl: String) {
             }
         }
         if (showUsersList) {
-            Text(
-                "👥 کاربران آنلاین (${users.size})",
-                fontSize = 13.sp,
-                color = WhiteText,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-            )
+            ) {
+                Box(
+                    Modifier
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF22C55E))
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "${users.size} کاربر آنلاین",
+                    fontSize = 13.sp,
+                    color = Color(0xFF4ADE80),
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
         Box(Modifier.fillMaxSize()) {
             AndroidView(

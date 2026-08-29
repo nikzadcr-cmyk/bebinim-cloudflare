@@ -2,10 +2,12 @@ package com.app.bebinim.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -14,16 +16,18 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -40,9 +44,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,231 +59,401 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.zIndex
+import coil.compose.AsyncImage
 import com.app.bebinim.R
 import com.app.bebinim.data.model.StickerCatalog
 import com.app.bebinim.data.websocket.ChatMessage
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 
-private val PanelBg = Color(0xFF161B22)
-private val PanelSurface = Color(0xFF1E2330)
-private val EmojiList = listOf("❤️", "😂", "🔥", "👍", "🎉")
+// ---- exact palette of the original ImmersiveChatPanel.kt ----
+private val PanelTop = Color(0xFF0F1419)
+private val PanelMid = Color(0xFF0A0E14)
+private val PanelBottom = Color(0xFF0D1117)
+private val PanelSurfaceBg = Color(0xFF161B22)
+private val CyanGlow = Color(0xFF06B6D4)
+private val CyanDark = Color(0xFF0891B2)
+private val InputGradientStart = Color(0xFF0C3B44)
+private val InputGradientEnd = Color(0xFF082A30)
+private val PurpleAccent = Color(0xFF8B5CF6)
+private val GrayIcon = Color(0xFF9CA3AF)
+private val DividerGray = Color(0xFF374151)
+
+private val EmojiList = listOf("❤️", "😂", "🔥", "👍", "🎉", "😮", "😭", "👏")
 
 /**
- * Fullscreen immersive chat — opens over the whole lobby with
- * compact message bubbles, emoji/sticker picker and blast overlay.
+ * Fullscreen immersive chat — EXACT original design:
+ * a side window (45% of screen width in landscape / 38% in portrait) docked
+ * to the screen edge over a dark scrim, video stays visible on the other half.
+ * Swipe the panel toward the edge (>100dp) or tap the scrim to close.
  */
 @Composable
 fun ImmersiveChatPanel(
     messages: List<ChatMessage>,
     currentUserId: String,
-    displayNames: Map<String, String>,
+    userIcons: Map<String, String>,
     messageText: String,
     onMessageTextChange: (String) -> Unit,
     onSendMessage: () -> Unit,
     onClose: () -> Unit,
     onReactionSend: (String) -> Unit,
     onStickerSend: (String) -> Unit,
+    hasUnreadMessages: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var showPicker by remember { mutableStateOf(false) }
+    var offsetX by remember { mutableStateOf(0f) } // dp
     val listState = rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+
+    // original formula: landscape 0.45 / portrait 0.38 of screen width
+    val screenWidthDp = configuration.screenWidthDp.toFloat()
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val panelWidth = (if (isLandscape) 0.45f else 0.38f) * screenWidthDp
+
+    // animated slide-out (spring 0.5/1500 like the original "chat_slide")
+    val slideTarget = if (offsetX > 100f) panelWidth else 0f
+    val slideOffset by animateDpAsState(
+        targetValue = with(density) { slideTarget.toDp() },
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 1500f),
+        label = "chat_slide"
+    )
+    LaunchedEffect(offsetX) {
+        if (offsetX > 100f) {
+            delay(80)
+            onClose()
+        }
+    }
+
+    // animated cyan border glow (0.3 → 0.6, 2000ms — original header_glow)
+    val headerGlow by rememberInfiniteTransition(label = "header_glow").animateFloat(
+        initialValue = 0.3f, targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(tween(2000), RepeatMode.Reverse),
+        label = "header_glow"
+    )
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color(0xCC050C1A))
-            .navigationBarsPadding()
-            .imePadding()
-    ) {
-        // header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(PanelBg)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("گفتگوی لابی", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text("${messages.size} پیام", fontSize = 11.sp, color = Color.White.copy(alpha = 0.5f))
-            }
+    // the original forces RTL inside the panel
+    CompositionLocalProvider(LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl) {
+        Box(modifier = modifier.fillMaxSize().zIndex(10f)) {
+            // ---- scrim: gradient toward the panel edge, tap to close ----
+            val gradientEndPx = with(density) { (screenWidthDp - panelWidth).dp.toPx() }
             Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.15f))
-                    .clickable { onClose() },
-                contentAlignment = Alignment.Center
-            ) {
-                Text("بستن", fontSize = 11.sp, color = Color.White)
-            }
-        }
-
-        // messages
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (messages.isEmpty()) {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("💬", fontSize = 40.sp)
-                        Text("هنوز پیامی نیست", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center)
-                    }
-                }
-            }
-            items(messages) { message ->
-                CompactMessageItem(message, currentUserId, displayNames[message.userId])
-            }
-        }
-
-        // emoji + sticker picker
-        AnimatedVisibility(visible = showPicker) {
-            EmojiStickerPickerPanel(
-                onEmojiSelected = { emoji ->
-                    onReactionSend(emoji)
-                },
-                onStickerSelected = { fileName ->
-                    onStickerSend(StickerCatalog.STICKER_PREFIX + fileName)
-                }
-            )
-        }
-
-        // input row
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(PanelBg)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(if (showPicker) Color(0xFF22C55E).copy(alpha = 0.25f) else PanelSurface)
-                    .clickable { showPicker = !showPicker },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(if (showPicker) "✕" else "😊", fontSize = 19.sp)
-            }
-            Spacer(Modifier.width(8.dp))
-            BasicTextField(
-                value = messageText,
-                onValueChange = onMessageTextChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .background(PanelSurface, RoundedCornerShape(24.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(24.dp))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 14.sp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { if (messageText.isNotBlank()) onSendMessage() }),
-                cursorBrush = Brush.verticalGradient(listOf(Color(0xFF22D3EE), Color(0xFF22D3EE))),
-                decorationBox = { inner ->
-                    Box {
-                        if (messageText.isBlank()) {
-                            Text("پیام...", fontSize = 13.sp, color = Color.White.copy(alpha = 0.4f))
-                        }
-                        inner()
-                    }
-                }
-            )
-            Spacer(Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
+                Modifier
+                    .fillMaxSize()
                     .background(
-                        if (messageText.isNotBlank()) ChatButtonGradient
-                        else SolidColor(PanelSurface)
+                        Brush.horizontalGradient(
+                            colors = listOf(Color.Transparent, PanelMid.copy(alpha = 0.4f), PanelMid.copy(alpha = 0.7f)),
+                            startX = 0f,
+                            endX = gradientEndPx
+                        )
                     )
-                    .clickable {
-                        keyboard?.hide()
-                        if (messageText.isNotBlank()) onSendMessage()
-                    },
-                contentAlignment = Alignment.Center
+                    .clickable { onClose() }
+            )
+
+            // ---- the side panel ----
+            Column(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .offset(x = slideOffset)
+                    .width(with(density) { panelWidth.toDp() })
+                    .fillMaxHeight()
+                    .shadow(
+                        24.dp,
+                        RoundedCornerShape(topStart = 24.dp, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = 24.dp),
+                        spotColor = CyanGlow.copy(alpha = 0.3f)
+                    )
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                PanelTop.copy(alpha = 0.68f),
+                                PanelMid.copy(alpha = 0.72f),
+                                PanelBottom.copy(alpha = 0.68f)
+                            )
+                        ),
+                        RoundedCornerShape(topStart = 24.dp, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = 24.dp)
+                    )
+                    .border(
+                        1.dp,
+                        Brush.horizontalGradient(
+                            listOf(CyanGlow.copy(alpha = headerGlow), CyanGlow.copy(alpha = 0.2f), CyanDark.copy(alpha = 0.1f))
+                        ),
+                        RoundedCornerShape(topStart = 24.dp, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = 24.dp)
+                    )
+                    .imePadding()
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    "ارسال",
-                    tint = if (messageText.isNotBlank()) Color.White else Color.White.copy(alpha = 0.4f),
-                    modifier = Modifier.size(20.dp)
+                // ---- header: chat icon + titles + close (like the source) ----
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(PanelSurfaceBg.copy(alpha = 0.95f))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Chat, null,
+                            tint = Color.White, modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("چت", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text(
+                            "گفتگوی لابی", fontSize = 10.sp,
+                            color = Color.White.copy(alpha = 0.78f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.15f))
+                            .clickable { onClose() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.Close, "بستن",
+                            tint = Color.White, modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                // animated divider
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(Color.Transparent, DividerGray, Color.Transparent)
+                            )
+                        )
                 )
+
+                // ---- messages (swipe toward edge closes, tap hides keyboard) ----
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    if (offsetX <= 100f) offsetX = 0f
+                                }
+                            ) { change, dragAmount ->
+                                change.consume()
+                                // RTL: sliding out = visually toward the left = negative px
+                                offsetX = (offsetX - dragAmount.x / density.density)
+                                    .coerceAtLeast(0f)
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                keyboard?.hide()
+                            }
+                        }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (messages.isEmpty()) {
+                        item {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("💬", fontSize = 40.sp)
+                                Text(
+                                    "هنوز پیامی نیست", fontSize = 13.sp,
+                                    color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                    items(messages) { message ->
+                        CompactMessageItem(
+                            message = message,
+                            currentUserId = currentUserId,
+                            iconId = userIcons[message.userId]
+                        )
+                    }
+                }
+
+                // ---- emoji + sticker picker ----
+                AnimatedVisibility(visible = showPicker) {
+                    EmojiStickerPickerPanel(
+                        onEmojiSelected = { emoji -> onReactionSend(emoji) },
+                        onStickerSelected = { fileName -> onStickerSend(StickerCatalog.STICKER_PREFIX + fileName) }
+                    )
+                }
+
+                // ---- input row ----
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(PanelSurfaceBg.copy(alpha = 0.9f))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.15f))
+                            .clickable { showPicker = !showPicker },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.EmojiEmotions, "ایموجی و استیکر",
+                            tint = if (showPicker) PurpleAccent else GrayIcon,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    BasicTextField(
+                        value = messageText,
+                        onValueChange = onMessageTextChange,
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        InputGradientStart.copy(alpha = 0.55f),
+                                        InputGradientEnd.copy(alpha = 0.55f)
+                                    )
+                                ),
+                                RoundedCornerShape(24.dp)
+                            )
+                            .border(
+                                1.dp,
+                                Brush.horizontalGradient(
+                                    listOf(Color.White.copy(alpha = 0.22f), Color.Transparent)
+                                ),
+                                RoundedCornerShape(24.dp)
+                            )
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 14.sp),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { if (messageText.isNotBlank()) onSendMessage() }),
+                        cursorBrush = SolidColor(CyanGlow),
+                        decorationBox = { inner ->
+                            Box {
+                                if (messageText.isBlank()) {
+                                    Text("پیام...", fontSize = 13.sp, color = Color.White.copy(alpha = 0.4f))
+                                }
+                                inner()
+                            }
+                        }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .shadow(4.dp, CircleShape, spotColor = PurpleAccent.copy(alpha = 0.2f))
+                            .clip(CircleShape)
+                            .background(if (messageText.isNotBlank()) CyanGlow else Color.White.copy(alpha = 0.15f))
+                            .clickable {
+                                keyboard?.hide()
+                                if (messageText.isNotBlank()) onSendMessage()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send, "ارسال",
+                            tint = Color.White, modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
         }
     }
 }
 
-/** Small bubble used inside the immersive chat. */
+/** Small bubble used inside the immersive chat (avatar + name, like the source). */
 @Composable
 fun CompactMessageItem(message: ChatMessage, currentUserId: String, iconId: String?) {
     val isOwn = message.userId == currentUserId
     StickerCatalog.drawableFor(message.message)?.let { stickerRes ->
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start
+            horizontalArrangement = if (isOwn) Arrangement.Start else Arrangement.End
         ) {
-            Column(horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start) {
-                if (!isOwn) {
-                    Text(
-                        message.username, fontSize = 10.sp,
-                        color = Color.White.copy(alpha = 0.6f),
-                        modifier = Modifier.padding(bottom = 2.dp, start = 4.dp)
-                    )
-                }
-                androidx.compose.material3.Icon(
-                    painterResource(stickerRes), message.username,
-                    modifier = Modifier.size(110.dp), tint = Color.Unspecified
-                )
-            }
+            androidx.compose.material3.Icon(
+                painterResource(stickerRes), message.username,
+                modifier = Modifier.size(90.dp), tint = Color.Unspecified
+            )
         }
         return
     }
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start
+        horizontalArrangement = if (isOwn) Arrangement.Start else Arrangement.End
     ) {
         Column(
-            horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start,
+            horizontalAlignment = if (isOwn) Alignment.Start else Alignment.End,
             modifier = Modifier.widthIn(max = 280.dp)
         ) {
             if (!isOwn) {
-                Text(
-                    message.username, fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF93C5FD),
-                    modifier = Modifier.padding(bottom = 2.dp, start = 4.dp)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.2f))
+                            .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AsyncImage(
+                            model = "https://app.bebinim.me/hw-assets/images/${iconId ?: "foxy"}.jpg",
+                            contentDescription = message.username,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize().clip(CircleShape)
+                        )
+                    }
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        message.username, fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF93C5FD)
+                    )
+                }
             }
+            Spacer(Modifier.height(3.dp))
             Box(
                 modifier = Modifier
                     .background(
@@ -305,8 +482,8 @@ fun EmojiStickerPickerPanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(260.dp)
-            .background(Color(0xF2161B22))
+            .height(240.dp)
+            .background(PanelSurfaceBg.copy(alpha = 0.97f))
     ) {
         Row(Modifier.fillMaxWidth().padding(8.dp)) {
             PickerTabButton(Modifier.weight(1f), "ایموجی‌ها", tab == 0) { tab = 0 }
@@ -324,7 +501,7 @@ fun EmojiStickerPickerPanel(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .background(PanelSurface)
+                            .background(Color.White.copy(alpha = 0.06f))
                             .clickable { onEmojiSelected(emoji) }
                             .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
@@ -353,7 +530,7 @@ fun EmojiStickerPickerPanel(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(PanelSurface)
+                                .background(Color.White.copy(alpha = 0.06f))
                                 .clickable { onStickerSelected(sticker.fileName) }
                                 .padding(4.dp),
                             contentAlignment = Alignment.Center
@@ -377,7 +554,7 @@ private fun PickerTabButton(modifier: Modifier, label: String, selected: Boolean
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) Color(0xFF22C55E).copy(alpha = 0.2f) else PanelSurface)
+            .background(if (selected) Color(0xFF22C55E).copy(alpha = 0.2f) else Color.White.copy(alpha = 0.06f))
             .border(
                 1.dp,
                 if (selected) Color(0xFF22C55E).copy(alpha = 0.5f) else Color.Transparent,
@@ -395,63 +572,58 @@ private fun PickerTabButton(modifier: Modifier, label: String, selected: Boolean
     }
 }
 
-/** Floating chat toggle button (bottom-start, above input). */
+/**
+ * Floating chat toggle button — 48dp circle, black 0.6, like the original
+ * fullscreen overlay (LobbyScreen$27$6).
+ */
 @Composable
 fun FloatingChatButton(onClick: () -> Unit, visible: Boolean, modifier: Modifier = Modifier) {
-    val pulse = rememberInfiniteTransition(label = "chatPulse")
-    val glow by pulse.animateFloat(
-        initialValue = 0.6f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse), label = "glow"
-    )
     AnimatedVisibility(
         visible = visible, modifier = modifier,
-        enter = slideInVertically { it / 2 } + fadeIn(),
-        exit = slideOutVertically { it / 2 } + fadeOut()
+        enter = fadeIn(), exit = fadeOut()
     ) {
         Box(
             modifier = Modifier
-                .size(54.dp)
-                .graphicsLayer { alpha = glow }
+                .size(48.dp)
                 .clip(CircleShape)
-                .background(ChatButtonGradient)
-                .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                .background(Color.Black.copy(alpha = 0.6f))
+                .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
                 .clickable { onClick() },
             contentAlignment = Alignment.Center
         ) {
-            androidx.compose.material3.Icon(
-                painterResource(R.drawable.ic_chat), "چت",
+            Icon(
+                Icons.AutoMirrored.Filled.Chat, "چت",
                 tint = Color.White, modifier = Modifier.size(24.dp)
             )
         }
     }
 }
 
-/** Floating mic toggle (bottom-start). */
+/** Floating mic toggle — 48dp circle, black 0.6, like the source. */
 @Composable
-fun FloatingMicButton(micEnabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun FloatingMicButton(
+    micEnabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    visible: Boolean = true
+) {
     AnimatedVisibility(
-        visible = true, modifier = modifier,
+        visible = visible, modifier = modifier,
         enter = fadeIn(), exit = fadeOut()
     ) {
         Box(
             modifier = Modifier
-                .size(54.dp)
+                .size(48.dp)
                 .clip(CircleShape)
-                .background(
-                    if (micEnabled) MicButtonGradient else SolidColor(PanelSurface)
-                )
-                .border(
-                    2.dp,
-                    if (micEnabled) Color.White.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.15f),
-                    CircleShape
-                )
+                .background(Color.Black.copy(alpha = 0.6f))
+                .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
                 .clickable { onClick() },
             contentAlignment = Alignment.Center
         ) {
-            androidx.compose.material3.Icon(
+            Icon(
                 painterResource(if (micEnabled) R.drawable.ic_microphone else R.drawable.ic_microphone_off),
                 "میکروفون",
-                tint = if (micEnabled) Color.White else Color(0xFF718096),
+                tint = if (micEnabled) Color.White else Color(0xFFEF4444),
                 modifier = Modifier.size(24.dp)
             )
         }
@@ -499,5 +671,3 @@ fun EmojiBlastOverlay(emojis: List<Pair<String, Long>>, modifier: Modifier = Mod
         }
     }
 }
-
-

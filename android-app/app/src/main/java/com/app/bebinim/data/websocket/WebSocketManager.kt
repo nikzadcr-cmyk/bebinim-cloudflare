@@ -165,12 +165,12 @@ class WebSocketManager private constructor() {
     private var pendingVoiceTokenRequest: CompletableDeferred<VoiceCredential>? = null
 
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .pingInterval(20, TimeUnit.SECONDS)      // liveness: detect dead sockets within ~2 pings
+        .pingInterval(15, TimeUnit.SECONDS)      // liveness: detect dead sockets faster
         .readTimeout(0, TimeUnit.MILLISECONDS)   // WebSockets must NOT have a read timeout —
         //                                          an idle chat room (30s of silence) killed the
         //                                          connection before ("اتصال قطع میشه")
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)     // snappier handshake
         .retryOnConnectionFailure(true)
         .build()
 
@@ -237,7 +237,9 @@ class WebSocketManager private constructor() {
         if (isReconnecting) return
         isReconnecting = true
         reconnectAttempts++
-        val delayMs = 1000L * (1L shl reconnectAttempts.coerceAtMost(5))
+        // fast first retries (500ms), capped backoff — snappier recovery
+        val delayMs = if (reconnectAttempts <= 2) 500L * reconnectAttempts
+            else 2000L * (reconnectAttempts - 1).coerceAtMost(5)
         scope.launch {
             delay(delayMs)
             webSocket = null
@@ -366,20 +368,6 @@ class WebSocketManager private constructor() {
         send(JSONObject().apply {
             put("type", "basemsg-change-mode"); put("lobbycode", code)
             put("data", JSONObject().apply { put("mode", mode) })
-        })
-    }
-
-    fun sendRadioMode(radioUrl: String) {
-        val code = _lobbyInfo.value?.code ?: return
-        send(JSONObject().apply {
-            put("type", "basemsg-change-mode"); put("lobbycode", code)
-            put("data", JSONObject().apply { put("mode", "radio"); put("url", radioUrl) })
-        })
-        send(JSONObject().apply {
-            put("type", "basemsg-change-vlink"); put("lobbycode", code)
-            put("data", JSONObject().apply {
-                put("type", "radio"); put("url", radioUrl); put("nlink", radioUrl); put("vcurrenttime", 0)
-            })
         })
     }
 

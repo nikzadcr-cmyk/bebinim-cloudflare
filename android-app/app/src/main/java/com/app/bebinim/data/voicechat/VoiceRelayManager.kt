@@ -66,7 +66,9 @@ class VoiceRelayManager private constructor(private val context: Context) {
         val track: AudioTrack = createTrack()
         var lastSeenMs: Long = System.currentTimeMillis()
         var lastSeq: Int = -1
-        val queue = ArrayDeque<ByteArray>()
+        // thread-safe channel — a dedicated playback coroutine consumes frames
+        val frames = Channel<ByteArray>(capacity = 64)
+        @Volatile var playbackStarted = false
 
         companion object {
             fun createTrack(): AudioTrack {
@@ -75,7 +77,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
                 )
                 return AudioTrack(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build(),
                     AudioFormat.Builder()
@@ -144,7 +146,10 @@ class VoiceRelayManager private constructor(private val context: Context) {
         scope.launch {
             try { sendChannel.send(buildLeave()) } catch (_: Exception) {}
         }
-        peers.values.forEach { try { it.track.stop(); it.track.release() } catch (_: Exception) {} }
+        peers.values.forEach {
+            try { it.frames.close() } catch (_: Exception) {}
+            try { it.track.stop(); it.track.release() } catch (_: Exception) {}
+        }
         peers.clear()
         resetAudioRouting()
     }
@@ -174,13 +179,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
 
     private suspend fun cleanupLoop() {
         while (currentCoroutineContext().isActive && started) {
-            val now = System.currentTimeMillis()
-            peers.entries.removeIf { (sid, p) ->
-                if (now - p.lastSeenMs > PEER_IDLE_TIMEOUT_MS) {
-                    try { p.track.stop(); p.track.release() } catch (_: Exception) {}
-                    true
-                } else false
-            }
+            cleanupPeers(System.currentTimeMillis())
             delay(2000)
         }
     }
@@ -278,15 +277,27 @@ class VoiceRelayManager private constructor(private val context: Context) {
         peer.lastSeq = rseq
         val payload = bytes.copyOfRange(7, bytes.size)
         val pcm = try { decryptAudio(payload) } catch (_: Exception) { payload }
-        peer.queue.addLast(pcm)
-        while (peer.queue.size > MAX_QUEUED_FRAMES) peer.queue.removeFirst()
-        scope.launch {
-            val data = peer.queue.removeFirstOrNull() ?: return@launch
-            try {
-                peer.track.play()
-                peer.track.write(data, 0, data.size)
-            } catch (_: Exception) {
+        // enqueue; a single playback coroutine per peer drains it in order
+        if (peer.frames.trySend(pcm).isFailure) {
+            peer.frames.tryReceive()
+            peer.frames.trySend(pcm)
+        }
+        if (!peer.playbackStarted) {
+            peer.playbackStarted = true
+            scope.launch { playbackLoop(peer) }
+        }
+    }
+
+    private suspend fun playbackLoop(peer: PeerAudio) {
+        try {
+            peer.track.play()
+            for (data in peer.frames) {
+                try {
+                    peer.track.write(data, 0, data.size)
+                } catch (_: Exception) {
+                }
             }
+        } catch (_: Exception) {
         }
     }
 
@@ -318,6 +329,8 @@ class VoiceRelayManager private constructor(private val context: Context) {
         try {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             am.mode = AudioManager.MODE_IN_COMMUNICATION
+            // audio must be audible — route to the speakerphone like a call app
+            am.isSpeakerphoneOn = true
         } catch (_: Exception) {
         }
     }
@@ -325,8 +338,8 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private fun resetAudioRouting() {
         try {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            am.mode = AudioManager.MODE_NORMAL
             am.isSpeakerphoneOn = false
+            am.mode = AudioManager.MODE_NORMAL
         } catch (_: Exception) {
         }
     }
@@ -348,8 +361,16 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private fun readInt16BE(arr: ByteArray, off: Int): Int =
         ((arr[off].toInt() and 0xFF) shl 8) or (arr[off + 1].toInt() and 0xFF)
 
-    // session assignment: use a hash of our user id (server rewrites anyway)
-    private var sendSession = (System.nanoTime() and 0x7FFFFFFF).toInt()
+    private fun cleanupPeers(now: Long) {
+        peers.entries.removeIf { (sid, p) ->
+            if (now - p.lastSeenMs > PEER_IDLE_TIMEOUT_MS) {
+                try { p.frames.close() } catch (_: Exception) {}
+                try { p.track.stop() } catch (_: Exception) {}
+                try { p.track.release() } catch (_: Exception) {}
+                true
+            } else false
+        }
+    }
 
     private fun wsSendBinary(bytes: ByteArray) {
         // access the raw socket through the manager's send channel

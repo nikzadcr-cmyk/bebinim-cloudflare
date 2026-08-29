@@ -53,7 +53,6 @@ val MicButtonGradient = Brush.verticalGradient(listOf(Color(0xFF10B981), Color(0
 val DisabledButtonGradient = Brush.verticalGradient(listOf(Color(0xFF252A3A), Color(0xFF1E2331)))
 val DangerButtonGradient = Brush.verticalGradient(listOf(Color(0xFFEF4444), Color(0xFFDC2626)))
 val NormalManagementGradient = Brush.verticalGradient(listOf(Color(0xFF2A2F40), Color(0xFF252A3A)))
-val RadioTabColor = Color(0xFF22C55E)
 val SharedTabColor = Color(0xFF9333EA)
 val LinkTabColor = Color(0xFF06B6D4)
 
@@ -68,7 +67,6 @@ fun LobbyHeader(
     onSubmit: () -> Unit,
     currentMode: String,
     onLinkTabClick: () -> Unit,
-    onRadioTabClick: () -> Unit,
     onSharedTabClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onModeClick: () -> Unit
@@ -146,13 +144,6 @@ fun LobbyHeader(
                 accent = LinkTabColor,
                 selected = currentMode == "link" || currentMode == "archive"
             ) { onLinkTabClick() }
-            ModeTab(
-                modifier = Modifier.weight(1f),
-                label = "رادیو",
-                iconRes = R.drawable.ic_radio,
-                accent = RadioTabColor,
-                selected = currentMode == "radio"
-            ) { onRadioTabClick() }
             ModeTab(
                 modifier = Modifier.weight(1f),
                 label = "فایل مشترک",

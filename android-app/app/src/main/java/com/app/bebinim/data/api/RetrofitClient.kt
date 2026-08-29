@@ -48,9 +48,14 @@ object RetrofitClient {
 
     val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            // faster connections: HTTP/2 multiplexing + pooled keep-alive + snappy timeouts
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .callTimeout(25, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .connectionPool(okhttp3.ConnectionPool(5, 5, TimeUnit.MINUTES))
+            .pingInterval(15, TimeUnit.SECONDS)
             .addInterceptor(headersInterceptor)
             .addInterceptor(loggingInterceptor)
             .authenticator(TokenAuthenticator())

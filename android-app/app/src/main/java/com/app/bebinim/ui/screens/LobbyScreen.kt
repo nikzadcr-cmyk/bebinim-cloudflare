@@ -21,6 +21,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,7 +56,6 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -94,6 +94,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -145,7 +146,6 @@ import java.util.Locale
 import kotlin.random.Random
 
 private const val LOBBY_ICON_BASE_URL = "https://app.bebinim.me/hw-assets/images/"
-private const val RADIO_URL = "https://streams.ilovemusic.de/iloveradio1.mp3"
 private val EMOJIS = listOf("❤️", "😂", "🔥", "👍", "🎉")
 
 data class LobbyIconDef(val id: String, val label: String, val placeholderColor: Color)
@@ -229,6 +229,7 @@ fun LobbyScreen(
     var hasSentReady by remember { mutableStateOf(false) }
     var isSyncing by remember { mutableStateOf(false) }
     var micPermissionAsked by remember { mutableStateOf(false) }
+    var fsPlayerView by remember { mutableStateOf<PlayerView?>(null) }
 
     LaunchedEffect(joinSuccess) {
         if (joinSuccess.isNotBlank()) showAliasDialog = true
@@ -263,11 +264,7 @@ fun LobbyScreen(
         }
     }
 
-    // radio URL auto-play detection (same heuristic as the original)
-    fun isRadioUrl(url: String): Boolean =
-        url.contains("ilovemusic", true) || url.contains("radio", true) || url.contains("stream", true)
-
-    var shouldAutoPlay by remember { mutableStateOf(false) }
+    // ExoPlayer
 
     // load media whenever url / mode / subtitle changes (original $9$1 logic)
     LaunchedEffect(currentVideoUrl, currentMode, subtitleInfo, selectedVideoUri) {
@@ -289,29 +286,20 @@ fun LobbyScreen(
                     exoPlayer.playWhenReady = false
                 }
             }
-            "radio", "webview", "aparat" -> Unit
+            "webview", "aparat" -> Unit
             else -> {
                 // link mode
                 if (currentVideoUrl.isNotBlank()) {
-                    shouldAutoPlay = isRadioUrl(currentVideoUrl)
                     val builder = MediaItem.Builder().setUri(currentVideoUrl)
                     val subs = buildSubtitleConfigs(subtitleInfo, selectedSubtitleUri, context)
                     if (subs.isNotEmpty()) builder.setSubtitleConfigurations(subs)
                     hasSentReady = false
-                    if (shouldAutoPlay) {
-                        // radio streams start immediately (original heuristic)
-                        pendingPlayState = null
-                        exoPlayer.setMediaItem(builder.build())
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = true
-                    } else {
-                        // original ($9$1): "prepare() called, waiting for state change..."
-                        // load PAUSED — the user (or a remote play command) starts it.
-                        pendingPlayState = null
-                        exoPlayer.setMediaItem(builder.build())
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = false
-                    }
+                    // original ($9$1): "prepare() called, waiting for state change..."
+                    // load PAUSED — the user (or a remote play command) starts it.
+                    pendingPlayState = null
+                    exoPlayer.setMediaItem(builder.build())
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = false
                 } else {
                     exoPlayer.stop()
                     exoPlayer.clearMediaItems()
@@ -547,7 +535,6 @@ fun LobbyScreen(
                 },
                 currentMode = currentMode,
                 onLinkTabClick = { lobbyViewModel.sendModeChange("link") },
-                onRadioTabClick = { lobbyViewModel.sendRadioMode(RADIO_URL) },
                 onSharedTabClick = { videoPicker.launch("video/*") },
                 onSettingsClick = { showVideoSettingsSheet = true },
                 onModeClick = { showPlaybackModeDialog = true }
@@ -576,7 +563,6 @@ fun LobbyScreen(
                     .background(Color.Black)
             ) {
                 when (currentMode) {
-                    "radio" -> RadioPlayerPlaceholder()
                     "shared" -> SharedModePlaceholder(
                         sharedFileName = sharedFileName,
                         hasLocalFile = selectedVideoUri != null,
@@ -607,7 +593,7 @@ fun LobbyScreen(
                                     fontSize = 13.sp, color = MediumGrayText
                                 )
                                 Text(
-                                    "برای انتخاب حالت پخش کلیک کنید (لینک / رادیو / فایل / وب‌ویو)",
+                                    "برای انتخاب حالت پخش کلیک کنید (لینک / فایل مشترک / وب‌ویو)",
                                     fontSize = 11.sp, color = CyanAccent
                                 )
                             }
@@ -794,6 +780,8 @@ fun LobbyScreen(
                 subtitleTextColor = subtitleTextColor,
                 usersCount = users.size,
                 micEnabled = isMicEnabled,
+                playerView = fsPlayerView,
+                onPlayerViewReady = { fsPlayerView = it },
                 onToggleMic = {
                     if (isMicEnabled) lobbyViewModel.sendMicToggle(false)
                     else if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
@@ -811,22 +799,26 @@ fun LobbyScreen(
                 onExit = { isFullscreen = false },
                 content = {
                     when (currentMode) {
-                        "radio" -> RadioPlayerPlaceholder()
                         "webview", "aparat" -> WebViewPlayer(url = currentVideoUrl)
-                        else -> PlayerSurface(exoPlayer, showController = true)
+                        else -> PlayerSurface(
+                            exoPlayer,
+                            showController = true,
+                            onPlayerView = { fsPlayerView = it }
+                        )
                     }
                 }
             )
         }
 
-        // floating chat-message notification — rendered ABOVE fullscreen overlay
+        // floating chat-message notification — rendered ABOVE fullscreen overlay,
+        // below the corner settings gear (top=72 keeps a clean gap from the 16+48dp gear)
         AnimatedVisibility(
             visible = floatingMessage != null,
             enter = fadeIn(), exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(top = 64.dp, end = 12.dp)
+                .padding(top = 72.dp, end = 16.dp)
         ) {
             floatingMessage?.let { msg ->
                 FloatingMessageNotification(
@@ -842,7 +834,7 @@ fun LobbyScreen(
             ImmersiveChatPanel(
                 messages = messages,
                 currentUserId = currentUserId,
-                displayNames = displayNames,
+                userIcons = userIcons,
                 messageText = messageText,
                 onMessageTextChange = { messageText = it },
                 onSendMessage = {
@@ -904,10 +896,6 @@ fun LobbyScreen(
             onDismiss = { showPlaybackModeDialog = false },
             onLink = {
                 lobbyViewModel.sendModeChange("link")
-                showPlaybackModeDialog = false
-            },
-            onRadio = {
-                lobbyViewModel.sendRadioMode(RADIO_URL)
                 showPlaybackModeDialog = false
             },
             onShared = {
@@ -1166,7 +1154,15 @@ private fun formatTime(timestamp: Long): String =
 
 @UnstableApi
 @Composable
-private fun PlayerSurface(exoPlayer: ExoPlayer, showController: Boolean) {
+/**
+ * PlayerSurface — PlayerView with an optional ref callback so the fullscreen
+ * overlay can drive showController()/hideController() (original parity).
+ */
+private fun PlayerSurface(
+    exoPlayer: ExoPlayer,
+    showController: Boolean,
+    onPlayerView: ((PlayerView?) -> Unit)? = null
+) {
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
@@ -1174,38 +1170,15 @@ private fun PlayerSurface(exoPlayer: ExoPlayer, showController: Boolean) {
                 useController = showController
                 setShowSubtitleButton(true)
                 subtitleView?.visibility = android.view.View.GONE
+                controllerAutoShow = false
+                setControllerHideOnTouch(false)
+                setControllerShowTimeoutMs(0)
+                onPlayerView?.invoke(this)
             }
         },
         update = { view -> view.useController = showController },
         modifier = Modifier.fillMaxSize()
     )
-}
-
-@Composable
-private fun RadioPlayerPlaceholder() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(listOf(Color(0xFF0D1F17), Color(0xFF050C1A)))
-            ),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        val pulse = rememberInfiniteTransition(label = "radio")
-        val alpha by pulse.animateFloat(
-            initialValue = 0.5f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
-            label = "radioAlpha"
-        )
-        Icon(
-            painterResource(R.drawable.ic_radio), null,
-            tint = GreenAccent.copy(alpha = alpha), modifier = Modifier.size(56.dp)
-        )
-        Spacer(Modifier.height(10.dp))
-        Text("در حال پخش رادیو موزیک", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = GreenAccent)
-        Text("🎧 برای همه اعضای لابی همزمان پخش می‌شود", fontSize = 11.sp, color = MediumGrayText)
-    }
 }
 
 @Composable
@@ -1296,13 +1269,17 @@ private fun UsersChipsRow(
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            Icons.Filled.Star, null, tint = YellowAccent, modifier = Modifier.size(15.dp)
+        // green dot + online count (user request — replaces the long text)
+        Box(
+            Modifier
+                .size(9.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF22C55E))
         )
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(5.dp))
         Text(
-            "کاربران آنلاین (${users.size})",
-            fontSize = 12.sp, fontWeight = FontWeight.Bold, color = WhiteText
+            "${users.size}",
+            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4ADE80)
         )
         Spacer(Modifier.width(10.dp))
         LazyRow(
@@ -1605,16 +1582,17 @@ private fun FloatingMessageNotification(
     onClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    // original LobbyScreen.kt:5174 — glassmorphism chip, max 220dp, top-end, chat glyph
+    // bigger, prettier glassmorphism card (user request) with avatar + glow
     Row(
         modifier = Modifier
-            .widthIn(max = 220.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .widthIn(min = 260.dp, max = 320.dp)
+            .shadow(12.dp, RoundedCornerShape(18.dp), spotColor = Color(0xFF60A5FA).copy(alpha = 0.35f))
+            .clip(RoundedCornerShape(18.dp))
             .background(
                 Brush.linearGradient(
                     listOf(
-                        Color.White.copy(alpha = 0.15f),
-                        Color.White.copy(alpha = 0.08f)
+                        Color(0xFF16233A).copy(alpha = 0.92f),
+                        Color(0xFF0A1120).copy(alpha = 0.92f)
                     )
                 )
             )
@@ -1622,31 +1600,47 @@ private fun FloatingMessageNotification(
                 1.dp,
                 Brush.linearGradient(
                     listOf(
-                        Color.White.copy(alpha = 0.3f),
-                        Color.White.copy(alpha = 0.1f)
+                        Color.White.copy(alpha = 0.35f),
+                        Color(0xFF60A5FA).copy(alpha = 0.25f),
+                        Color.White.copy(alpha = 0.12f)
                     )
                 ),
-                RoundedCornerShape(12.dp)
+                RoundedCornerShape(18.dp)
             )
             .clickable { onClick(); onDismiss() }
-            .padding(10.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // avatar
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF60A5FA).copy(alpha = 0.2f))
+                .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = "https://app.bebinim.me/hw-assets/images/${iconId ?: "foxy"}.jpg",
+                contentDescription = message.username,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().clip(CircleShape)
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(message.username, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                message.message, fontSize = 13.sp, color = WhiteText,
+                maxLines = 2, overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(Modifier.width(8.dp))
         Icon(
             Icons.AutoMirrored.Filled.Chat, null,
             tint = Color(0xFF60A5FA),
-            modifier = Modifier
-                .size(16.dp)
-                .padding(bottom = 2.dp)
+            modifier = Modifier.size(18.dp)
         )
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f, fill = false)) {
-            Text(message.username, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                message.message, fontSize = 12.sp, color = WhiteText,
-                maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-        }
     }
 }
 
@@ -1655,6 +1649,16 @@ private fun FloatingMessageNotification(
 // ================================================================
 
 @Composable
+/**
+ * FullscreenPlayerOverlay — EXACT original fullscreen layout (LobbyScreen$27):
+ *   • exit button   → TopStart, 16dp, 48dp black-0.6 circle
+ *   • mic button    → CenterEnd, 16dp end / 64dp top
+ *   • chat button   → CenterEnd, 16dp end / 64dp bottom
+ *   • settings gear → TopEnd corner (user request), 48dp circle
+ *   • online chip   → green dot + count, under the exit button
+ * Auto-hide: icons fade after 5s; a tap toggles them + the native controller
+ * (original controllerVisible / controllerShowTrigger behavior).
+ */
 private fun FullscreenPlayerOverlay(
     exoPlayer: ExoPlayer,
     currentCueText: String,
@@ -1662,6 +1666,8 @@ private fun FullscreenPlayerOverlay(
     subtitleTextColor: Color,
     usersCount: Int,
     micEnabled: Boolean,
+    playerView: PlayerView?,
+    onPlayerViewReady: (PlayerView?) -> Unit,
     onToggleMic: () -> Unit,
     onOpenChat: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -1683,6 +1689,20 @@ private fun FullscreenPlayerOverlay(
             decor?.systemUiVisibility = 0
         }
     }
+
+    // ---- original auto-hide state (controllerVisible / controllerShowTrigger) ----
+    var controllerVisible by remember { mutableStateOf(true) }
+    var controllerShowTrigger by remember { mutableStateOf(0L) }
+
+    // hide after 5s (C.DEFAULT_MAX_SEEK_TO_PREVIOUS_POSITION_MS), like LobbyScreen$27$1$1
+    LaunchedEffect(controllerShowTrigger) {
+        if (controllerShowTrigger > 0) {
+            delay(5000)
+            controllerVisible = false
+            playerView?.hideController()
+        }
+    }
+
     Box(
         Modifier
             .fillMaxSize()
@@ -1705,58 +1725,111 @@ private fun FullscreenPlayerOverlay(
             )
         }
 
-        // exit fullscreen (top-start)
+        // tap anywhere toggles icons + native controller (LobbyScreen$27$3$1)
         Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(12.dp)
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.55f))
-                .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
-                .clickable { onExit() },
-            contentAlignment = Alignment.Center
+            Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        if (controllerVisible) {
+                            controllerVisible = false
+                            playerView?.hideController()
+                        } else {
+                            controllerVisible = true
+                            playerView?.showController()
+                            controllerShowTrigger = System.currentTimeMillis()
+                        }
+                    }
+                }
+        )
+
+        AnimatedVisibility(
+            visible = controllerVisible,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopStart)
         ) {
-            Icon(Icons.Filled.Close, "خروج از حالت تمام صفحه", tint = Color.White, modifier = Modifier.size(20.dp))
+            // exit fullscreen — TopStart corner, 16dp padding, 48dp circle (source)
+            Box(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
+                    .clickable { onExit() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.Close, "خروج از حالت تمام صفحه", tint = Color.White, modifier = Modifier.size(24.dp))
+            }
         }
 
-        // settings gear (top-end, next to users count) — subtitle & audio track selection
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(12.dp)
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.55f))
-                .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
-                .clickable { onOpenSettings() },
-            contentAlignment = Alignment.Center
+        // settings gear — TopEnd corner (no more conflict with notification)
+        AnimatedVisibility(
+            visible = controllerVisible,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopEnd)
         ) {
-            Icon(Icons.Filled.Settings, "تنظیمات پلیر", tint = Color.White, modifier = Modifier.size(20.dp))
+            Box(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
+                    .clickable { onOpenSettings() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.Settings, "تنظیمات پلیر (زیرنویس / ترک صوتی)", tint = Color.White, modifier = Modifier.size(24.dp))
+            }
         }
 
-        // users count chip (below the gear)
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 60.dp, end = 12.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color.Black.copy(alpha = 0.55f))
-                .padding(horizontal = 10.dp, vertical = 6.dp)
+        // online users — green dot + count, under the exit button (no overlap)
+        AnimatedVisibility(
+            visible = controllerVisible,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopStart)
         ) {
-            Text("کاربران آنلاین ($usersCount)", fontSize = 11.sp, color = Color.White)
+            Row(
+                modifier = Modifier
+                    .padding(start = 16.dp, top = 76.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF22C55E))
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("$usersCount", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
         }
 
-        // floating mic + chat (bottom-start)
-        Row(
+        // floating mic — CenterEnd, end 16dp / top 64dp (source $27$6)
+        Box(
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                .align(Alignment.CenterEnd)
+                .padding(top = 64.dp, end = 16.dp)
         ) {
-            FloatingMicButton(micEnabled = micEnabled, onClick = onToggleMic)
+            com.app.bebinim.ui.components.FloatingMicButton(
+                micEnabled = micEnabled,
+                onClick = onToggleMic,
+                visible = controllerVisible
+            )
+        }
+
+        // floating chat — CenterEnd, end 16dp / bottom 64dp (source $27$6)
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(bottom = 64.dp, end = 16.dp)
+        ) {
             com.app.bebinim.ui.components.FloatingChatButton(
-                onClick = onOpenChat, visible = true
+                onClick = onOpenChat,
+                visible = controllerVisible
             )
         }
     }
@@ -1859,7 +1932,6 @@ private fun PlaybackModeDialog(
     currentMode: String,
     onDismiss: () -> Unit,
     onLink: () -> Unit,
-    onRadio: () -> Unit,
     onShared: () -> Unit,
     onWebView: () -> Unit
 ) {
@@ -1876,13 +1948,6 @@ private fun PlaybackModeDialog(
                     icon = { Icon(painterResource(R.drawable.ic_link), null, tint = Color(0xFF06B6D4), modifier = Modifier.size(22.dp)) },
                     selected = currentMode == "link" || currentMode == "archive",
                     onClick = onLink
-                )
-                PlaybackModeOption(
-                    title = "رادیو", subtitle = "گوش دادن به رادیو موزیک",
-                    accent = Color(0xFF22C55E),
-                    icon = { Icon(painterResource(R.drawable.ic_radio), null, tint = Color(0xFF22C55E), modifier = Modifier.size(22.dp)) },
-                    selected = currentMode == "radio",
-                    onClick = onRadio
                 )
                 PlaybackModeOption(
                     title = "فایل ویدیو", subtitle = "انتخاب فایل از گوشی — همه اعضا همزمان پخش می‌کنند",
@@ -2298,7 +2363,13 @@ private fun UsersDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF0E1928),
         shape = RoundedCornerShape(20.dp),
-        title = { Text("کاربران آنلاین (${users.size})", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = WhiteText) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(10.dp).clip(CircleShape).background(Color(0xFF22C55E)))
+                Spacer(Modifier.width(7.dp))
+                Text("${users.size} کاربر آنلاین", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = WhiteText)
+            }
+        },
         text = {
             Column {
                 if (users.isEmpty()) Text("در حال بارگذاری...", fontSize = 13.sp, color = MediumGrayText)
@@ -2361,7 +2432,7 @@ private fun HelpDialog(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("چطور لابی رو با دوستاتون استفاده کنید:", fontSize = 13.sp, color = Color(0xFFB9C2D0))
                 Text("۱. کد لابی رو با دکمه دعوت برای دوستاتون بفرستید", fontSize = 12.sp, color = WhiteText.copy(alpha = 0.85f))
-                Text("۲. حالت پخش رو انتخاب کنید: لینک، رادیو، فایل مشترک یا وب‌ویو", fontSize = 12.sp, color = WhiteText.copy(alpha = 0.85f))
+                Text("۲. حالت پخش رو انتخاب کنید: لینک، فایل مشترک یا وب‌ویو", fontSize = 12.sp, color = WhiteText.copy(alpha = 0.85f))
                 Text("۳. با چت و استیکر حرف بزنید و میکروفون رو برای صحبت صوتی روشن کنید", fontSize = 12.sp, color = WhiteText.copy(alpha = 0.85f))
                 Text("۴. همه پخش‌ها همزمان بین اعضا همگام‌سازی می‌شوند", fontSize = 12.sp, color = WhiteText.copy(alpha = 0.85f))
                 Spacer(Modifier.height(6.dp))

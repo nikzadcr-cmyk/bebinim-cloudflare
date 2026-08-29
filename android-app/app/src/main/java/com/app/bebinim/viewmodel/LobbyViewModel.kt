@@ -188,7 +188,6 @@ class LobbyViewModel : ViewModel() {
     fun sendMessage(text: String) = webSocketManager.sendMessage(text)
     fun sendVideoLink(link: String) = webSocketManager.sendVideoLink(link)
     fun sendModeChange(mode: String) = webSocketManager.sendModeChange(mode)
-    fun sendRadioMode(url: String) = webSocketManager.sendRadioMode(url)
     fun sendWebViewMode(url: String) = webSocketManager.sendWebViewMode(url)
     fun sendSharedFileMode(fileName: String) = webSocketManager.sendSharedFileMode(fileName)
     fun sendMusicWithMetadata(
