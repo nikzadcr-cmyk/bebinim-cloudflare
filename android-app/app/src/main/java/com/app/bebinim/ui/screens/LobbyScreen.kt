@@ -2149,7 +2149,8 @@ private fun VideoSettingsSheet(
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     val textDisabled = runCatching {
-                        exoPlayer.trackSelectionParameters.isTrackTypeDisabled(C.TRACK_TYPE_TEXT)
+                        exoPlayer.trackSelectionParameters.disabledTrackTypes
+                            .contains(C.TRACK_TYPE_TEXT)
                     }.getOrDefault(false)
                     val selectedTextIdx = textTracks.indexOfFirst { it.first.isTrackSelected(it.second) }
                     OptionRow(
