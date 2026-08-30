@@ -18,6 +18,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,6 +42,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -145,7 +148,7 @@ fun ImmersiveChatPanel(
     val panelWidth = if (isLandscape) 0.45f * screenWidthDp else screenWidthDp
     val panelWidthDp = panelWidth.dp
     val panelShape = if (isFullPage) RoundedCornerShape(0.dp)
-        else RoundedCornerShape(topStart = 24.dp, topEnd = 0.dp, bottomEnd = 0.dp, bottomStart = 24.dp)
+        else RoundedCornerShape(topStart = 0.dp, topEnd = 24.dp, bottomEnd = 24.dp, bottomStart = 0.dp) // docked visual RIGHT (RTL): free edge = visual left
 
     // animated slide-out (spring 0.5/1500 like the original "chat_slide")
     val slideTarget = if (offsetX > 100f) panelWidthDp else 0.dp
@@ -192,10 +195,13 @@ fun ImmersiveChatPanel(
             )
 
             // ---- the side panel / full-page chat ----
+            // (user request: "پنجره چت ببر سمت راست" — in the RTL scope CenterStart = visual RIGHT)
             Column(
                 modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .offset(x = slideOffset)
+                    .align(Alignment.CenterStart)
+                    // absoluteOffset: positive x always moves visually right (RTL-proof) —
+                    // the panel slides OUT toward its right-side dock when closing
+                    .absoluteOffset(x = slideOffset)
                     .width(panelWidthDp)
                     .fillMaxHeight()
                     .shadow(
@@ -293,8 +299,9 @@ fun ImmersiveChatPanel(
                                 }
                             ) { change, dragAmount ->
                                 change.consume()
-                                // RTL: sliding out = visually toward the left = negative px
-                                offsetX = (offsetX - dragAmount / density.density)
+                                // panel docked visual RIGHT: swipe toward the right edge
+                                // (positive px) slides it out and closes
+                                offsetX = (offsetX + dragAmount / density.density)
                                     .coerceAtLeast(0f)
                             }
                         }
@@ -335,6 +342,30 @@ fun ImmersiveChatPanel(
                         onEmojiSelected = { emoji -> onReactionSend(emoji) },
                         onStickerSelected = { fileName -> onStickerSend(StickerCatalog.STICKER_PREFIX + fileName) }
                     )
+                }
+
+                // ---- quick emoji bar — tap sends immediately (user request:
+                //      "ایموجی‌های آماده ارسال بالای کادر اینپوت، دقیق و با اندازه مناسب") ----
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .background(PanelSurfaceBg.copy(alpha = 0.72f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    EmojiList.forEach { emoji ->
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onReactionSend(emoji) }
+                                .padding(horizontal = 9.dp, vertical = 5.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(emoji, fontSize = 26.sp)
+                        }
+                    }
                 }
 
                 // ---- input row ----

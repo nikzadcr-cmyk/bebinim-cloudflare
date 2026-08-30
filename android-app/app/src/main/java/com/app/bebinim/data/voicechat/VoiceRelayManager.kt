@@ -49,6 +49,9 @@ class VoiceRelayManager private constructor(private val context: Context) {
 
         const val PEER_IDLE_TIMEOUT_MS = 8000L
         const val MAX_QUEUED_FRAMES = 12
+        // small send queue: voice is realtime — a deep queue only ADDED latency
+        // ("ویس دیر به گوش طرف می‌رسه"); overflow drops the OLDEST frame instead
+        const val SEND_QUEUE_FRAMES = 16
 
         @Volatile
         private var instance: VoiceRelayManager? = null
@@ -96,7 +99,7 @@ class VoiceRelayManager private constructor(private val context: Context) {
     private val ws = WebSocketManager.getInstance()
 
     private val peers = ConcurrentHashMap<Int, PeerAudio>()
-    private val sendChannel = Channel<ByteArray>(capacity = 64)
+    private val sendChannel = Channel<ByteArray>(capacity = SEND_QUEUE_FRAMES)
 
     private var started = false
     @Volatile private var micEnabled = false
@@ -198,7 +201,12 @@ class VoiceRelayManager private constructor(private val context: Context) {
                     if (read > 0) {
                         val frame = ByteArray(read)
                         System.arraycopy(buf, 0, frame, 0, read)
-                        sendChannel.send(frame)
+                        // never block the mic loop — if the queue is full, drop the OLDEST
+                        // frame and enqueue this one (blocking here skewed realtime audio)
+                        if (!sendChannel.trySend(frame).isSuccess) {
+                            sendChannel.tryReceive()
+                            sendChannel.trySend(frame)
+                        }
                     }
                 }
             } catch (_: Exception) {

@@ -962,7 +962,7 @@ fun LobbyScreen(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(top = 18.dp, end = 76.dp) // high up, LEFT of the 48dp fullscreen gear (gear spans 16..64dp from the end) — no overlap
+                .padding(top = 18.dp, end = 14.dp) // hugged to the visual LEFT edge (user request: "نوتیف ببر سمت لبه چپ")
         ) {
             floatingMessage?.let { msg ->
                 FloatingMessageNotification(
@@ -1967,12 +1967,13 @@ private fun FullscreenPlayerOverlay(
             }
         }
 
-        // settings gear moved to the BOTTOM-end corner (user request: "گزینه تنظیمات بالا
-        // کنار نوتیف رو بیار جاشون پایین") — replaces the removed stock controller gear+CC
+        // settings gear — visual BOTTOM-RIGHT corner (user request: "ببرش سمت راست گوشه"):
+        // the media3 controller renders its position/duration times on the bottom-left,
+        // where this gear used to sit on top of them (RTL: BottomStart = visual right)
         AnimatedVisibility(
             visible = iconsVisible,
             enter = fadeIn(), exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomEnd)
+            modifier = Modifier.align(Alignment.BottomStart)
         ) {
             Box(
                 modifier = Modifier
@@ -2013,11 +2014,12 @@ private fun FullscreenPlayerOverlay(
             }
         }
 
-        // floating mic — CenterEnd, end 16dp / top 64dp (source $27$6)
+        // floating mic — visual RIGHT edge (RTL: CenterStart = visual right; user request:
+        // "چت و ویس ببر سمت راست"), end 16dp / top 64dp (source $27$6)
         Box(
             modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(top = 64.dp, end = 16.dp)
+                .align(Alignment.CenterStart)
+                .padding(top = 64.dp, start = 16.dp)
         ) {
             com.app.bebinim.ui.components.FloatingMicButton(
                 micEnabled = micEnabled,
@@ -2026,11 +2028,12 @@ private fun FullscreenPlayerOverlay(
             )
         }
 
-        // floating chat — CenterEnd, end 16dp / bottom 64dp (source $27$6)
+        // floating chat — visual RIGHT edge, under the mic (user request: "پنجره چت ببر
+        // سمت راست همراه با ویس چت")
         Box(
             modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(bottom = 64.dp, end = 16.dp)
+                .align(Alignment.CenterStart)
+                .padding(bottom = 64.dp, start = 16.dp)
         ) {
             com.app.bebinim.ui.components.FloatingChatButton(
                 onClick = onOpenChat,

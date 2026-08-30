@@ -76,6 +76,9 @@ class WebSocketManager private constructor() {
     companion object {
         private const val TAG = "WebSocketManager"
         private val WS_URL = BuildConfig.WS_URL
+        /** max bytes of pending voice in the OkHttp send queue before new frames are dropped
+         *  (~0.5s of voice at 32KB/s — keeps chat text flowing and avoids write timeouts) */
+        const val MAX_VOICE_QUEUE_BYTES = 16L * 1024
 
         @Volatile
         private var instance: WebSocketManager? = null
@@ -465,9 +468,18 @@ class WebSocketManager private constructor() {
         _subtitleInfo.value = SubtitleInfo(url, language, label, "text/vtt")
     }
 
-    /** Send raw binary (voice frames) through the active socket. */
+    /** Send raw binary (voice frames) through the active socket.
+     *  PERF GUARD: voice is realtime — if the uplink is slow, frames used to pile up in
+     *  OkHttp's send queue; chat TEXT then waited behind ~seconds of stale audio ("پیام
+     *  هامون دیر میره / ویس دیر به گوش می‌رسه") and a stalled queue could even trip the
+     *  15s write timeout ("اتصال قطع میشه"). Dropping stale frames keeps voice live and
+     *  chat instant — dropping beats delaying for live audio. */
     fun rawSendBinary(bytes: ByteArray) {
-        try { webSocket?.send(okio.Buffer().write(bytes).readByteString()) } catch (_: Exception) {}
+        val ws = webSocket ?: return
+        try {
+            if (ws.queueSize() > MAX_VOICE_QUEUE_BYTES) return // network behind — drop this frame
+            ws.send(okio.Buffer().write(bytes).readByteString())
+        } catch (_: Exception) {}
     }
 
     private fun send(json: JSONObject) {

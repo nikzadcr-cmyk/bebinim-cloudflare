@@ -70,12 +70,23 @@ export class LobbyRoom {
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
-    // restore persisted playback meta
+    // restore persisted playback meta ('playback' single-key write is the new hot path —
+    // legacy per-key values kept as fallback for DOs persisted by older versions)
     this.state.blockConcurrencyWhile(async () => {
       this.lobbyCode = (await this.state.storage.get<string>('code')) || '';
       this.lobbyType = (await this.state.storage.get<string>('lobbyType')) || 'movie';
-      this.currentUrl = (await this.state.storage.get<string>('url')) || null;
-      this.currentMode = (await this.state.storage.get<string>('mode')) || 'link';
+      const pb = await this.state.storage.get<{ url?: string; mode?: string; currentTime?: number; playing?: boolean }>('playback');
+      if (pb) {
+        this.currentUrl = pb.url || null;
+        this.currentMode = pb.mode || 'link';
+        this.currentTime = Number(pb.currentTime || 0);
+        this.playing = !!pb.playing;
+      } else {
+        this.currentUrl = (await this.state.storage.get<string>('url')) || null;
+        this.currentMode = (await this.state.storage.get<string>('mode')) || 'link';
+        this.currentTime = (await this.state.storage.get<number>('currentTime')) || 0;
+        this.playing = !!(await this.state.storage.get<boolean>('playing'));
+      }
       this.musicMeta = (await this.state.storage.get<Record<string, unknown>>('musicMeta')) || null;
       this.creatorRealId = (await this.state.storage.get<string>('creator')) || null;
       const closed = await this.state.storage.get<number>('closed');
@@ -398,7 +409,7 @@ export class LobbyRoom {
         this.playing = false; // fresh content always starts paused; clients auto-play on load
         for (const x of this.users.values()) x.ready = false; // re-gate playback for new content
         this.updatedAt = Date.now();
-        await this.persistPlayback();
+        this.persistPlayback();
         this.broadcast({ type: 'basemsg-change-vlink', state: 1, user_id: u.socketId, data: d }, null, u.lobbyCode);
         return;
       }
@@ -415,7 +426,7 @@ export class LobbyRoom {
         }
         if (mode === 'shared' && d.fileName) this.sharedFileName = d.fileName;
         if ((mode === 'radio' || mode === 'webview' || mode === 'aparat') && d.url) this.currentUrl = d.url;
-        await this.persistPlayback();
+        this.persistPlayback();
         this.broadcast({ type: 'basemsg-change-mode', state: 1, user_id: u.socketId, data: d }, null, u.lobbyCode);
         return;
       }
@@ -428,7 +439,7 @@ export class LobbyRoom {
         this.playing = false;
         for (const x of this.users.values()) x.ready = false;
         this.updatedAt = Date.now();
-        await this.persistPlayback();
+        this.persistPlayback();
         this.broadcast({ type: 'basemsg-change-video', state: 1, user_id: u.socketId, data: d }, null, u.lobbyCode);
         return;
       }
@@ -438,8 +449,11 @@ export class LobbyRoom {
         this.playing = isPlaying;
         this.currentTime = Number(msg.currentTime ?? (data as { currentTime?: number })?.currentTime ?? this.currentTime);
         this.updatedAt = Date.now();
-        await this.state.storage.put('playing', this.playing);
+        // PERF: never await storage on the hot path — a durable write gated every
+        // incoming frame/behind it (input gate) and delayed the broadcast (user:
+        // "کند نشه و قطع نشه"). Persist fire-and-forget, broadcast FIRST.
         this.broadcast({ type: 'basemsg-play-pause', user_id: u.socketId, data: isPlaying ? 'play' : 'pause', currentTime: this.currentTime }, socketId, u.lobbyCode);
+        this.persistPlayback();
         return;
       }
 
@@ -447,8 +461,8 @@ export class LobbyRoom {
         const t = Number((data as { currentTime?: number })?.currentTime ?? 0);
         this.currentTime = t;
         this.updatedAt = Date.now();
-        await this.state.storage.put('currentTime', t);
         this.broadcast({ type: 'basemsg-click-bar', user_id: u.socketId, data: { currentTime: t } }, socketId, u.lobbyCode);
+        this.persistPlayback();
         return;
       }
 
@@ -543,11 +557,15 @@ export class LobbyRoom {
     return this.currentTime + (Date.now() - this.updatedAt) / 1000;
   }
 
-  private async persistPlayback(): Promise<void> {
-    await this.state.storage.put('url', this.currentUrl ?? '');
-    await this.state.storage.put('mode', this.currentMode);
-    await this.state.storage.put('currentTime', this.currentTime);
-    await this.state.storage.put('playing', this.playing);
+  private persistPlayback(): void {
+    // PERF: single key, fire-and-forget — one durable write instead of four awaited
+    // ones; playback meta only matters for late joiners after a hibernation wake
+    void this.state.storage.put('playback', {
+      url: this.currentUrl ?? '',
+      mode: this.currentMode,
+      currentTime: this.currentTime,
+      playing: this.playing,
+    }).catch(() => { /* best-effort */ });
   }
 
   // ---------- voice ----------
