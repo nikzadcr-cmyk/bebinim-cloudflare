@@ -9,22 +9,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Badge
-import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -63,6 +59,8 @@ fun ProfileScreen(onBack: () -> Unit, onLogout: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .navigationBarsPadding() // logout must clear the system gesture/nav bar (user bug:
+            //                          "خروج از حساب با دکمه‌های پایین گوشی اختلال داره")
             .padding(horizontal = 20.dp)
     ) {
         Spacer(Modifier.height(44.dp))
@@ -118,37 +116,8 @@ fun ProfileScreen(onBack: () -> Unit, onLogout: () -> Unit) {
         }
 
         Spacer(Modifier.height(16.dp))
-        SectionLabel("وضعیت اشتراک")
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0E1928))
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp).fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Icon(Icons.Filled.WorkspacePremium, null, tint = YellowAccent.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                Spacer(Modifier.height(10.dp))
-                Text("اشتراک فعالی ندارید", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = LightGrayText)
-                Text(
-                    "با خرید اشتراک به لابی‌های نامحدود دسترسی داشته باشید",
-                    fontSize = 13.sp, color = MediumGrayText,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-                Spacer(Modifier.height(14.dp))
-                Button(
-                    onClick = { },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = YellowAccent)
-                ) {
-                    Icon(Icons.Filled.ShoppingCart, null, tint = Color(0xFF050C1A), modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.size(6.dp))
-                    Text("خرید اشتراک", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFF050C1A))
-                }
-            }
-        }
+        // "خرید اشتراک" section removed per user request
 
         Spacer(Modifier.weight(1f))
         TextButton(

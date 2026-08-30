@@ -274,6 +274,7 @@ fun LobbyScreen(
     var pendingPlayState by remember { mutableStateOf<Boolean?>(null) }
     var hasSentReady by remember { mutableStateOf(false) }
     var isSyncing by remember { mutableStateOf(false) }
+    var lastMediaLoadAt by remember { mutableStateOf(0L) }
     var micPermissionAsked by remember { mutableStateOf(false) }
 
     var aliasDialogShown by remember { mutableStateOf(false) }
@@ -359,6 +360,7 @@ fun LobbyScreen(
                     exoPlayer.setMediaItem(item)
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = false
+                    lastMediaLoadAt = System.currentTimeMillis()
                 }
             }
             "webview", "aparat" -> Unit
@@ -375,6 +377,7 @@ fun LobbyScreen(
                     exoPlayer.setMediaItem(builder.build())
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = false
+                    lastMediaLoadAt = System.currentTimeMillis()
                 } else {
                     exoPlayer.stop()
                     exoPlayer.clearMediaItems()
@@ -398,11 +401,24 @@ fun LobbyScreen(
 
     // apply incoming play/pause + seek sync from others
     // (original isSyncing guard — prevents seek ping-pong flooding the socket)
+    // SYNC HARDENING (user bug: "پاوس زدم، فیلم طرف مقابل میره اول و سریع برمیگرده"):
+    //   • explicit seek (click-bar)  → always follow
+    //   • play  → seek only when meaningfully out of sync (>1.5s drift)
+    //   • pause → NEVER seek — both sides are already at ≈ the same spot; seeking here
+    //     (e.g. a 0-time pause echoed right after a local media reload) is exactly what
+    //     made the peer's picture flash to the start and snap back.
     LaunchedEffect(videoSyncState) {
         videoSyncState?.let { sync ->
             if (currentMode == "link" || currentMode == "shared") {
                 isSyncing = true
-                exoPlayer.seekTo((sync.currentTime * 1000).toLong())
+                val target = (sync.currentTime * 1000).toLong()
+                if (sync.isSeek) {
+                    exoPlayer.seekTo(target)
+                } else if (sync.isPlaying) {
+                    if (kotlin.math.abs(exoPlayer.currentPosition - target) > 1500) {
+                        exoPlayer.seekTo(target)
+                    }
+                }
                 exoPlayer.playWhenReady = sync.isPlaying
                 delay(800)
                 isSyncing = false
@@ -411,15 +427,23 @@ fun LobbyScreen(
     }
 
     // late-join full playback sync (same isSyncing guard as above)
+    // HARDENING: reload the media item ONLY when the URL actually changed — re-running
+    // setMediaItem on the same content reset the position to 0 (another "jump to start
+    // then snap back" path); otherwise just drift-correct.
     LaunchedEffect(playbackSyncState) {
         playbackSyncState?.let { sync ->
             if (sync.mode == "link" || sync.mode == "shared") {
                 isSyncing = true
-                if (sync.mode == "link" && !sync.videoUrl.isNullOrBlank()) {
+                if (sync.mode == "link" && !sync.videoUrl.isNullOrBlank() &&
+                    currentVideoUrl != sync.videoUrl
+                ) {
                     exoPlayer.setMediaItem(MediaItem.Builder().setUri(sync.videoUrl).build())
                     exoPlayer.prepare()
                 }
-                exoPlayer.seekTo((sync.currentTime * 1000).toLong())
+                val target = (sync.currentTime * 1000).toLong()
+                if (kotlin.math.abs(exoPlayer.currentPosition - target) > 1500) {
+                    exoPlayer.seekTo(target)
+                }
                 exoPlayer.playWhenReady = sync.isPlaying
                 delay(800)
                 isSyncing = false
@@ -465,9 +489,15 @@ fun LobbyScreen(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 // original: "⏸️ Not sending state - syncing=..." — skip while applying remote sync
                 if (!isSyncing && exoPlayer.playbackState == Player.STATE_READY) {
-                    lobbyViewModel.updateVideoState(
-                        exoPlayer.currentPosition / 1000.0, isPlaying
-                    )
+                    // a media (re)load lands paused at position 0 — the pause blip it
+                    // produces would broadcast a 0-time sync and yank the peer to the
+                    // start of the movie ("فیلم میره از اول"). Suppress it briefly.
+                    val justReloaded = System.currentTimeMillis() - lastMediaLoadAt < 1500
+                    if (!justReloaded || isPlaying) {
+                        lobbyViewModel.updateVideoState(
+                            exoPlayer.currentPosition / 1000.0, isPlaying
+                        )
+                    }
                 }
             }
 
@@ -738,25 +768,61 @@ fun LobbyScreen(
                     }
                 }
 
-                // fullscreen enter button (bottom-end of player, original parity)
+                // bottom-end corner buttons: [settings][fullscreen] — the settings gear was
+                // moved here from the top (next to the notification) per user request
                 val canGoFullscreen = if (currentMode == "shared") selectedVideoUri != null
                     else currentVideoUrl.isNotBlank() || currentMode == "webview" || currentMode == "aparat"
-                if (canGoFullscreen) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(8.dp)
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.55f))
-                            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
-                            .clickable { isFullscreen = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Filled.Fullscreen, "حالت تمام صفحه",
-                            tint = Color.White, modifier = Modifier.size(20.dp)
-                        )
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (canGoFullscreen) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f))
+                                .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                                .clickable { showVideoSettingsSheet = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.Settings, "تنظیمات پلیر (زیرنویس / ترک صوتی)",
+                                tint = Color.White, modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f))
+                                .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                                .clickable { isFullscreen = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.Fullscreen, "حالت تمام صفحه",
+                                tint = Color.White, modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f))
+                                .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                                .clickable { showVideoSettingsSheet = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.Settings, "تنظیمات پلیر (زیرنویس / ترک صوتی)",
+                                tint = Color.White, modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -1256,7 +1322,12 @@ private fun PlayerSurface(
                 useController = showController
                 this.controllerAutoShow = controllerAutoShow
                 setControllerShowTimeoutMs(controllerShowTimeoutMs)
-                setShowSubtitleButton(true)
+                // user request: remove the stock settings gear + CC icons from the bottom
+                // controller bar — the app's own settings gear (subtitle/audio sheet) now
+                // sits next to the fullscreen button at the bottom corner instead
+                setShowSubtitleButton(false)
+                findViewById<android.view.View?>(androidx.media3.ui.R.id.exo_settings)?.visibility = android.view.View.GONE
+                findViewById<android.view.View?>(androidx.media3.ui.R.id.exo_cc)?.visibility = android.view.View.GONE
                 subtitleView?.visibility = android.view.View.GONE
                 // tap-to-toggle on the content frame: single tap on the video area hides the
                 // controls when visible and shows them when hidden (controller must NOT be
@@ -1740,7 +1811,7 @@ private fun FloatingMessageNotification(
         // avatar
         Box(
             modifier = Modifier
-                .size(24.dp)
+                .size(28.dp)
                 .clip(CircleShape)
                 .background(Color(0xFF60A5FA).copy(alpha = 0.2f))
                 .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
@@ -1752,11 +1823,11 @@ private fun FloatingMessageNotification(
                 modifier = Modifier.fillMaxSize().clip(CircleShape)
             )
         }
-        Spacer(Modifier.width(7.dp))
+        Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f, fill = false)) {
-            Text(message.username, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(message.username, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                message.message, fontSize = 10.sp, color = WhiteText,
+                message.message, fontSize = 12.sp, color = WhiteText, lineHeight = 16.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
         }
@@ -1764,7 +1835,7 @@ private fun FloatingMessageNotification(
         Icon(
             Icons.AutoMirrored.Filled.Chat, null,
             tint = Color(0xFF60A5FA),
-            modifier = Modifier.size(14.dp)
+            modifier = Modifier.size(16.dp)
         )
     }
 }
@@ -1897,11 +1968,12 @@ private fun FullscreenPlayerOverlay(
             }
         }
 
-        // settings gear — TopEnd corner (no more conflict with notification)
+        // settings gear moved to the BOTTOM-end corner (user request: "گزینه تنظیمات بالا
+        // کنار نوتیف رو بیار جاشون پایین") — replaces the removed stock controller gear+CC
         AnimatedVisibility(
             visible = iconsVisible,
             enter = fadeIn(), exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopEnd)
+            modifier = Modifier.align(Alignment.BottomEnd)
         ) {
             Box(
                 modifier = Modifier

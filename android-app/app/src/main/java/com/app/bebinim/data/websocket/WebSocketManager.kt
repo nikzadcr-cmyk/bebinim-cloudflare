@@ -43,7 +43,9 @@ sealed class ConnectionState {
     data class Error(val message: String) : ConnectionState()
 }
 
-data class VideoSyncState(val currentTime: Double, val isPlaying: Boolean)
+/** isSeek=true marks an explicit scrub (basemsg-click-bar) — receivers must always follow it.
+ *  Plain play/pause syncs must NOT jerk the picture (user: "فیلم میره از اول و سریع برمیگرده"). */
+data class VideoSyncState(val currentTime: Double, val isPlaying: Boolean, val isSeek: Boolean = false)
 data class PlaybackSyncState(
     val videoUrl: String?,
     val currentTime: Double,
@@ -567,13 +569,13 @@ class WebSocketManager private constructor() {
             "basemsg-play-pause" -> {
                 val playing = data == "play"
                 val time = obj.optDouble("currentTime", 0.0)
-                _videoSyncState.value = VideoSyncState(time, playing)
+                _videoSyncState.value = VideoSyncState(time, playing, isSeek = false)
             }
 
             "basemsg-click-bar" -> {
                 val d = obj.optJSONObject("data")
                 val time = d?.optDouble("currentTime", 0.0) ?: 0.0
-                _videoSyncState.value = VideoSyncState(time, _videoSyncState.value?.isPlaying ?: false)
+                _videoSyncState.value = VideoSyncState(time, _videoSyncState.value?.isPlaying ?: false, isSeek = true)
             }
 
             "basemsg-playback-sync" -> {
