@@ -1327,7 +1327,6 @@ private fun PlayerSurface(
                 // sits next to the fullscreen button at the bottom corner instead
                 setShowSubtitleButton(false)
                 findViewById<android.view.View?>(androidx.media3.ui.R.id.exo_settings)?.visibility = android.view.View.GONE
-                findViewById<android.view.View?>(androidx.media3.ui.R.id.exo_cc)?.visibility = android.view.View.GONE
                 subtitleView?.visibility = android.view.View.GONE
                 // tap-to-toggle on the content frame: single tap on the video area hides the
                 // controls when visible and shows them when hidden (controller must NOT be
