@@ -38,6 +38,9 @@ compose.desktop {
     application {
         mainClass = "com.app.hamfilm.desktop.MainKt"
 
+        // GPU rendering for the run task AND the packaged launchers (RPM/AppImage/portable)
+        jvmArgs("-Dskiko.renderApi=OPENGL", "-Dskiko.fallback.renderApi=SOFTWARE")
+
         nativeDistributions {
             targetFormats(TargetFormat.Rpm, TargetFormat.AppImage)
             packageName = "HamFilm"

@@ -36,6 +36,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.app.hamfilm.desktop.net.HamSocket
 import com.app.hamfilm.desktop.ui.LobbyScreen
 import com.app.hamfilm.desktop.ui.LoginScreen
@@ -48,30 +49,36 @@ import java.awt.GraphicsEnvironment
  * HamFilm (همفیلم) — Linux desktop client.
  * Same backend, same basemsg-* WebSocket protocol, same voice framing as the Android app.
  */
-fun main() = application {
-    val windowState = rememberWindowState(width = 1280.dp, height = 760.dp)
-    var fullscreen by remember { mutableStateOf(false) }
-    var vlcAvailable by remember { mutableStateOf<Boolean?>(null) }
+fun main() {
+    // smoothness: force the GPU (OpenGL) renderer — falls back to SOFTWARE only if GL init fails
+    System.setProperty("skiko.renderApi", "OPENGL")
+    System.setProperty("skiko.fallback.renderApi", "SOFTWARE")
+    return application {
+        val windowIcon = remember { Res.icon?.let { BitmapPainter(it) } }
+        val windowState = rememberWindowState(width = 1280.dp, height = 760.dp)
+        var fullscreen by remember { mutableStateOf(false) }
+        var vlcAvailable by remember { mutableStateOf<Boolean?>(null) }
 
-    LaunchedEffect(Unit) {
-        vlcAvailable = withContext(Dispatchers.IO) { VideoEngineProbe.available() }
-    }
-
-    Window(
-        onCloseRequest = {
-            HamSocket.getInstance().disconnect()
-            exitApplication()
-        },
-        state = windowState,
-        title = "همفیلم",
-        onKeyEvent = { e ->
-            // ESC exits fullscreen
-            if (e.type == KeyEventType.KeyUp && e.key == Key.Escape && fullscreen) {
-                fullscreen = false
-                true
-            } else false
+        LaunchedEffect(Unit) {
+            vlcAvailable = withContext(Dispatchers.IO) { VideoEngineProbe.available() }
         }
-    ) {
+
+        Window(
+            onCloseRequest = {
+                HamSocket.getInstance().disconnect()
+                exitApplication()
+            },
+            state = windowState,
+            title = "همفیلم",
+            icon = windowIcon,
+            onKeyEvent = { e ->
+                // ESC exits fullscreen
+                if (e.type == KeyEventType.KeyUp && e.key == Key.Escape && fullscreen) {
+                    fullscreen = false
+                    true
+                } else false
+            }
+        ) {
         LaunchedEffect(fullscreen) {
             try {
                 val device = GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice
@@ -104,6 +111,7 @@ fun main() = application {
             }
         }
     }
+}
 }
 
 private object VideoEngineProbe {

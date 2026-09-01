@@ -4,6 +4,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -51,10 +54,12 @@ import com.app.hamfilm.desktop.StickerCatalog
 import com.app.hamfilm.desktop.YellowAccent
 import com.app.hamfilm.desktop.BorderGray
 import com.app.hamfilm.desktop.ChipDark
+import com.app.hamfilm.desktop.ChipStrokeColor
 import com.app.hamfilm.desktop.DarkCardBackground
 import com.app.hamfilm.desktop.DarkNavyBackground
 import com.app.hamfilm.desktop.LightGrayText
 import com.app.hamfilm.desktop.MediumGrayText
+import com.app.hamfilm.desktop.OwnBubbleGrad
 import com.app.hamfilm.desktop.RedAccent
 import java.time.Instant
 import java.time.ZoneId
@@ -92,7 +97,7 @@ fun ChatPanel(
     ) {
         // ---- header ----
         Row(
-            Modifier.fillMaxWidth().background(DarkNavyBackground).padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().background(com.app.hamfilm.desktop.HeaderGrad).padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("گفتگو", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = LightGrayText)
@@ -179,13 +184,16 @@ fun ChatPanel(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             QUICK_EMOJIS.forEach { emoji ->
+                val hover = remember { MutableInteractionSource() }
+                val hovered by hover.collectIsHoveredAsState()
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable { onSend(emoji) }
+                        .background(if (hovered) ChipDark else Color.Transparent)
+                        .clickable(interactionSource = hover, indication = null) { onSend(emoji) }
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
-                    Text(emoji, fontSize = 20.sp)
+                    Text(emoji, fontSize = 21.sp)
                 }
             }
         }
@@ -295,8 +303,13 @@ private fun MessageItem(
                     color = if (mine) Color(0xFF141B26) else LightGrayText,
                     modifier = Modifier
                         .widthIn(max = 240.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (mine) YellowAccent else ChipDark)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (mine) OwnBubbleGrad else SolidColor(ChipDark))
+                        .border(
+                            1.dp,
+                            if (mine) com.app.hamfilm.desktop.YellowDeep.copy(alpha = 0.5f) else ChipStrokeColor,
+                            RoundedCornerShape(14.dp)
+                        )
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }

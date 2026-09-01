@@ -163,6 +163,17 @@ class VideoEngine(
         try { player.subpictures().setTrack(id) } catch (_: Exception) {}
     }
 
+    /** id of the currently selected audio track (-1 = none/disable) */
+    val currentAudioTrackId: Int
+        get() = try { player.audio().track() } catch (_: Exception) { -1 }
+
+    /** id of the currently selected subtitle track (-1 = none/disable) */
+    val currentSubtitleTrackId: Int
+        get() = try { player.subpictures().track() } catch (_: Exception) { -1 }
+
+    val currentRate: Float
+        get() = try { player.status().rate() } catch (_: Exception) { 1f }
+
     fun addSubtitleFile(path: String) {
         try { player.subpictures().setSubTitleFile(File(path)) } catch (_: Exception) {}
     }

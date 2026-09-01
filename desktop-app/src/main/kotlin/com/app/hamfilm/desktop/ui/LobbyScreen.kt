@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -38,8 +39,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -64,20 +63,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.app.hamfilm.desktop.AppBgGradient
 import com.app.hamfilm.desktop.AvatarDef
 import com.app.hamfilm.desktop.BlueAccent
 import com.app.hamfilm.desktop.BorderGray
+import com.app.hamfilm.desktop.CardStrokeColor
+import com.app.hamfilm.desktop.ChipStrokeColor
 import com.app.hamfilm.desktop.ChipDark
 import com.app.hamfilm.desktop.DarkCardBackground
 import com.app.hamfilm.desktop.DarkNavyBackground
 import com.app.hamfilm.desktop.GreenAccent
+import com.app.hamfilm.desktop.HeaderGrad
 import com.app.hamfilm.desktop.LOBBY_ICONS
 import com.app.hamfilm.desktop.LightGrayText
 import com.app.hamfilm.desktop.MediumGrayText
 import com.app.hamfilm.desktop.RedAccent
+import com.app.hamfilm.desktop.NotifGrad
 import com.app.hamfilm.desktop.Res
 import com.app.hamfilm.desktop.SessionUser
 import com.app.hamfilm.desktop.YellowAccent
+import com.app.hamfilm.desktop.YellowGrad
 import com.app.hamfilm.desktop.net.HamSocket
 import com.app.hamfilm.desktop.video.VideoEngine
 import com.app.hamfilm.desktop.voice.VoiceRelay
@@ -143,7 +148,7 @@ fun LobbyScreen(
     var aliasIcon by remember { mutableStateOf<String?>(null) }
     var showLinkDialog by remember { mutableStateOf(false) }
     var linkInput by remember { mutableStateOf("") }
-    var showSettingsMenu by remember { mutableStateOf(false) }
+    var showVideoSettings by remember { mutableStateOf(false) }
     var tracksVersion by remember { mutableIntStateOf(0) }
     var playError by remember { mutableStateOf("") }
     var notifStamp by remember { mutableIntStateOf(0) }
@@ -389,8 +394,17 @@ fun LobbyScreen(
         )
     }
 
+    // ------- video settings dialog (audio track / subtitle / speed) -------
+    if (showVideoSettings) {
+        VideoSettingsDialog(
+            engine = engine,
+            tracksVersion = tracksVersion,
+            onDismiss = { showVideoSettings = false }
+        )
+    }
+
     // ================= LAYOUT (RTL: first child = visual RIGHT) =================
-    Row(Modifier.fillMaxSize().background(DarkNavyBackground)) {
+    Row(Modifier.fillMaxSize().background(AppBgGradient)) {
         // chat panel docked to the visual RIGHT side
         if (chatOpen) {
             ChatPanel(
@@ -406,7 +420,8 @@ fun LobbyScreen(
             // ---- header ----
             if (!fullscreen) {
                 Row(
-                    Modifier.fillMaxWidth().background(DarkCardBackground)
+                    Modifier.fillMaxWidth().background(HeaderGrad)
+                        .border(1.dp, CardStrokeColor)
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -442,6 +457,7 @@ fun LobbyScreen(
                         Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .background(ChipDark)
+                            .border(1.dp, ChipStrokeColor, RoundedCornerShape(8.dp))
                             .clickable {
                                 try {
                                     val cb = java.awt.Toolkit.getDefaultToolkit().systemClipboard
@@ -493,7 +509,8 @@ fun LobbyScreen(
                         Modifier
                             .padding(horizontal = 14.dp, vertical = 6.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(ChipDark)
+                            .background(NotifGrad)
+                            .border(1.dp, ChipStrokeColor, RoundedCornerShape(12.dp))
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -585,13 +602,19 @@ fun LobbyScreen(
                                         ws.updateVideoUrl(localFilePath)
                                     }
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = YellowAccent)
-                            ) { Text("انتخاب فایل محلی", color = Color(0xFF10131A)) }
+                                shape = RoundedCornerShape(12.dp),
+                                elevation = null,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                                modifier = Modifier.background(YellowGrad, RoundedCornerShape(12.dp))
+                            ) { Text("انتخاب فایل محلی", color = Color(0xFF10131A), fontWeight = FontWeight.Bold) }
 
                             Button(
                                 onClick = { showLinkDialog = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = BlueAccent)
-                            ) { Text("افزودن لینک", color = Color(0xFF10131A)) }
+                                shape = RoundedCornerShape(12.dp),
+                                elevation = null,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                                modifier = Modifier.background(com.app.hamfilm.desktop.BlueGrad, RoundedCornerShape(12.dp))
+                            ) { Text("افزودن لینک", color = Color(0xFF10131A), fontWeight = FontWeight.Bold) }
                         }
                         if (!playerReady && effectiveUrl.isNotBlank()) {
                             Spacer(Modifier.height(10.dp))
@@ -622,13 +645,19 @@ fun LobbyScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                IconButton(onClick = {
-                    if (isPlayingLocal) engine.pause() else engine.play()
-                }) {
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(YellowGrad)
+                        .clickable { if (isPlayingLocal) engine.pause() else engine.play() },
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
                         if (isPlayingLocal) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         contentDescription = "پخش/توقف",
-                        tint = YellowAccent
+                        tint = Color(0xFF10131A),
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
@@ -677,69 +706,9 @@ fun LobbyScreen(
                     )
                 }
 
-                // settings menu
-                Box {
-                    IconButton(onClick = { showSettingsMenu = true }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "تنظیمات", tint = MediumGrayText)
-                    }
-                    DropdownMenu(
-                        expanded = showSettingsMenu,
-                        onDismissRequest = { showSettingsMenu = false }
-                    ) {
-                        // audio tracks
-                        val audioTracks = engine.audioTracks()
-                        if (audioTracks.size > 1) {
-                            Text("صدای زبان/تراک:", fontSize = 12.sp, color = MediumGrayText,
-                                modifier = Modifier.padding(horizontal = 12.dp))
-                            audioTracks.forEach { td ->
-                                DropdownMenuItem(
-                                    text = { Text(td.description(), fontSize = 12.sp) },
-                                    onClick = {
-                                        engine.setAudioTrack(td.id())
-                                        showSettingsMenu = false
-                                    }
-                                )
-                            }
-                        }
-                        // subtitle tracks
-                        val subTracks = engine.subtitleTracks()
-                        if (subTracks.size > 1) {
-                            Text("زیرنویس:", fontSize = 12.sp, color = MediumGrayText,
-                                modifier = Modifier.padding(horizontal = 12.dp))
-                            subTracks.forEach { td ->
-                                DropdownMenuItem(
-                                    text = { Text(td.description(), fontSize = 12.sp) },
-                                    onClick = {
-                                        engine.setSubtitleTrack(td.id())
-                                        showSettingsMenu = false
-                                    }
-                                )
-                            }
-                        }
-                        DropdownMenuItem(
-                            text = { Text("بارگذاری فایل زیرنویس...", fontSize = 12.sp) },
-                            onClick = {
-                                showSettingsMenu = false
-                                val chooser = JFileChooser()
-                                val r = chooser.showOpenDialog(null)
-                                if (r == JFileChooser.APPROVE_OPTION) {
-                                    engine.addSubtitleFile(chooser.selectedFile.absolutePath)
-                                }
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("سرعت: ۰.۷۵x", fontSize = 12.sp) },
-                            onClick = { engine.setRate(0.75f); showSettingsMenu = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("سرعت: ۱x", fontSize = 12.sp) },
-                            onClick = { engine.setRate(1f); showSettingsMenu = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("سرعت: ۱.۲۵x", fontSize = 12.sp) },
-                            onClick = { engine.setRate(1.25f); showSettingsMenu = false }
-                        )
-                    }
+                // settings — full dialog with audio-track / subtitle / speed sections
+                IconButton(onClick = { showVideoSettings = true }) {
+                    Icon(Icons.Filled.Settings, contentDescription = "تنظیمات پخش", tint = MediumGrayText)
                 }
 
                 // fullscreen toggle

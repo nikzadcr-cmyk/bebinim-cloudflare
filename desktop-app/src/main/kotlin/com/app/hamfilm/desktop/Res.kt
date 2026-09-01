@@ -36,6 +36,9 @@ object Res {
     // ---- bundled art ----
     val logo: ImageBitmap? by lazy { image("logo.png") }
 
+    /** app icon for the window titlebar / taskbar */
+    val icon: ImageBitmap? by lazy { image("icon.png") }
+
     private val avatars = ConcurrentHashMap<String, ImageBitmap?>()
     fun avatar(id: String?): ImageBitmap? {
         if (id.isNullOrBlank()) return null

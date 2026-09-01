@@ -3,6 +3,8 @@ package com.app.hamfilm.desktop.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,7 +42,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.app.hamfilm.desktop.ActiveLobby
+import com.app.hamfilm.desktop.AppBgGradient
 import com.app.hamfilm.desktop.BlueAccent
+import com.app.hamfilm.desktop.ChipDark
+import com.app.hamfilm.desktop.ChipStrokeColor
 import com.app.hamfilm.desktop.DarkCardBackground
 import com.app.hamfilm.desktop.DarkNavyBackground
 import com.app.hamfilm.desktop.GreenAccent
@@ -49,6 +54,7 @@ import com.app.hamfilm.desktop.Res
 import com.app.hamfilm.desktop.RedAccent
 import com.app.hamfilm.desktop.SessionUser
 import com.app.hamfilm.desktop.YellowAccent
+import com.app.hamfilm.desktop.YellowGrad
 import com.app.hamfilm.desktop.net.Api
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -111,7 +117,7 @@ fun LobbiesScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(DarkNavyBackground)
+            .background(AppBgGradient)
             .padding(20.dp)
     ) {
         // ---------- header ----------
@@ -142,13 +148,16 @@ fun LobbiesScreen(
 
         // ---------- create / join ----------
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            // create card
+            // create card (hover: brightens — desktop nicety)
+            val createHover = remember { MutableInteractionSource() }
+            val createHovered by createHover.collectIsHoveredAsState()
             Box(
                 Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(DarkCardBackground)
-                    .clickable(enabled = !busy) {
+                    .background(if (createHovered) ChipDark else DarkCardBackground)
+                    .border(1.dp, if (createHovered) YellowAccent.copy(alpha = 0.45f) else ChipStrokeColor, RoundedCornerShape(16.dp))
+                    .clickable(interactionSource = createHover, indication = null, enabled = !busy) {
                         busy = true; error = ""
                         scope.launch {
                             Api.createLobbyToken(user.token)
@@ -174,6 +183,7 @@ fun LobbiesScreen(
                     .weight(1f)
                     .clip(RoundedCornerShape(16.dp))
                     .background(DarkCardBackground)
+                    .border(1.dp, ChipStrokeColor, RoundedCornerShape(16.dp))
                     .padding(18.dp)
             ) {
                 Column {
@@ -201,6 +211,7 @@ fun LobbiesScreen(
                                 }
                             },
                             enabled = joinCode.length >= 4 && !busy,
+                            shape = RoundedCornerShape(11.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = BlueAccent)
                         ) {
                             if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFF10131A))
@@ -250,7 +261,7 @@ fun LobbiesScreen(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .background(DarkCardBackground)
-                            .border(1.dp, com.app.hamfilm.desktop.BorderGray, RoundedCornerShape(14.dp))
+                            .border(1.dp, ChipStrokeColor, RoundedCornerShape(14.dp))
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {

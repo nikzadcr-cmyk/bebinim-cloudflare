@@ -2,6 +2,7 @@ package com.app.hamfilm.desktop.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,12 +39,16 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.app.hamfilm.desktop.AppBgGradient
 import com.app.hamfilm.desktop.BlueAccent
+import com.app.hamfilm.desktop.CardStrokeColor
+import com.app.hamfilm.desktop.ChipStrokeColor
 import com.app.hamfilm.desktop.DarkCardBackground
 import com.app.hamfilm.desktop.GreenAccent
 import com.app.hamfilm.desktop.Res
 import com.app.hamfilm.desktop.RedAccent
 import com.app.hamfilm.desktop.YellowAccent
+import com.app.hamfilm.desktop.YellowGrad
 import com.app.hamfilm.desktop.net.Api
 import kotlinx.coroutines.launch
 
@@ -69,14 +74,19 @@ fun LoginScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(DarkCardBackground)
+            .background(AppBgGradient)
             .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.width(400.dp)
+            modifier = Modifier
+                .width(400.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(DarkCardBackground)
+                .border(1.dp, CardStrokeColor, RoundedCornerShape(22.dp))
+                .padding(horizontal = 24.dp, vertical = 28.dp)
         ) {
             Res.logo?.let {
                 Image(
@@ -109,8 +119,11 @@ fun LoginScreen(
                             }
                         },
                         enabled = email.isNotBlank() && password.isNotBlank() && !loading,
-                        colors = ButtonDefaults.buttonColors(containerColor = YellowAccent),
+                        shape = RoundedCornerShape(13.dp),
+                        elevation = null,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
                         modifier = Modifier.fillMaxWidth().height(48.dp)
+                            .background(YellowGrad, RoundedCornerShape(13.dp))
                     ) {
                         if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         else Text("ورود", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10131A))
