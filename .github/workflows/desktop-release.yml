@@ -33,7 +33,7 @@ jobs:
 
       - name: Build RPM (Fedora)
         working-directory: desktop-app
-        run: ./gradlew --no-daemon packageReleaseRpmForCurrentOS
+        run: ./gradlew --no-daemon packageRpm
 
       - name: Build portable bundle (bundled JRE, run anywhere)
         working-directory: desktop-app
@@ -48,7 +48,7 @@ jobs:
         continue-on-error: true
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: ./gradlew --no-daemon packageReleaseAppImageForCurrentOS
+        run: ./gradlew --no-daemon packageAppImage
 
       - name: Collect artifacts
         id: collect
