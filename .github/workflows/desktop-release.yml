@@ -1,0 +1,75 @@
+name: Desktop Linux Build (Fedora/KDE)
+
+# Build the HamFilm Linux desktop app (RPM for Fedora + AppImage + portable zip)
+# and publish to the GitHub Release. All artifacts are built ONLY here — never locally.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'desktop-app/**'
+      - '.github/workflows/desktop-release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-desktop:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install jpackage RPM tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm file fakeroot binutils
+
+      - name: Build RPM (Fedora)
+        working-directory: desktop-app
+        run: ./gradlew --no-daemon packageReleaseRpmForCurrentOS
+
+      - name: Build portable bundle (bundled JRE, run anywhere)
+        working-directory: desktop-app
+        run: |
+          ./gradlew --no-daemon createDistributable
+          cd build/compose/binaries/main/app/HamFilm
+          zip -r -q "$GITHUB_WORKSPACE/hamfilm-1.5-portable-linux64.zip" .
+          cd "$GITHUB_WORKSPACE"
+
+      - name: Build AppImage (best effort)
+        working-directory: desktop-app
+        continue-on-error: true
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: ./gradlew --no-daemon packageReleaseAppImageForCurrentOS
+
+      - name: Collect artifacts
+        id: collect
+        run: |
+          set -e
+          mkdir -p out
+          find desktop-app/build/compose/binaries -name '*.rpm'  -exec cp {} out/ \; || true
+          find desktop-app/build/compose/binaries -name '*.AppImage' -exec cp {} out/ \; || true
+          cp hamfilm-1.5-portable-linux64.zip out/ || true
+          ls -la out/
+
+      - name: Create/Update Release (v1.5-desktop)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.5-desktop"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+          gh release create "$TAG" \
+            --title "همفیلم 1.5 — نسخه لینوکس (فدورا / KDE)" \
+            --notes "نسخه دسکتاپ لینوکسِ همفیلم — همان سرور و همان امکانات اپ اندروید (چت، ویس‌چت، تماشای هم‌زمان، استیکر).
+          - فایل RPM برای فدورا:  sudo dnf install ./HamFilm-1.5.0.x86_64.rpm
+          - برای پخش ویدیو باید VLC نصب باشد:  sudo dnf install vlc  (نیاز به مخزن RPM Fusion)
+          - AppImage و نسخه پرتابل هم جاوا همراه خودشان را دارند و به جاوا روی سیستم نیاز ندارند."
+          gh release upload "$TAG" out/* --clobber
