@@ -20,9 +20,9 @@ class BebinimApplication : Application(), ImageLoaderFactory {
         ImageLoader.Builder(this)
             .components {
                 if (Build.VERSION.SDK_INT >= 28) {
-                    add(ImageDecoderDecoder(this@BebinimApplication))
+                    add(ImageDecoderDecoder.Factory())
                 } else {
-                    add(GifDecoder())
+                    add(GifDecoder.Factory())
                 }
             }
             .crossfade(false)
