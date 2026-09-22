@@ -39,7 +39,8 @@ compose.desktop {
         mainClass = "com.app.hamfilm.desktop.MainKt"
 
         // GPU rendering for the run task AND the packaged launchers (RPM/AppImage/portable)
-        jvmArgs("-Dskiko.renderApi=OPENGL", "-Dskiko.fallback.renderApi=SOFTWARE")
+        // -Xmx512m keeps the app light on RAM (users asked for a low-footprint app)
+        jvmArgs("-Dskiko.renderApi=OPENGL", "-Dskiko.fallback.renderApi=SOFTWARE", "-Xmx512m")
 
         nativeDistributions {
             targetFormats(TargetFormat.Rpm, TargetFormat.AppImage)

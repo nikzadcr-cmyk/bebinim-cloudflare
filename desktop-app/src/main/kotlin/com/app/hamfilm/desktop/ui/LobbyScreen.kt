@@ -50,6 +50,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -133,15 +134,14 @@ fun LobbyScreen(
     // ------- local ui state -------
     var chatOpen by remember { mutableStateOf(!fullscreen) }
     LaunchedEffect(fullscreen) { if (fullscreen) chatOpen = false }
+    var chatUnread by remember { mutableStateOf(false) }
     var micOn by remember { mutableStateOf(false) }
-    var currentTimeMs by remember { mutableStateOf(0L) }
-    var durationMs by remember { mutableStateOf(0L) }
-    var isPlayingLocal by remember { mutableStateOf(false) }
+    // player time lives in a holder so VLC's frequent time ticks only
+    // recompose the controls bar — NOT the whole lobby screen (lighter/smooth)
+    val time = remember { TimeHolder() }
     var playerReady by remember { mutableStateOf(false) }
     var hasSentReady by remember { mutableStateOf(false) }
     var pendingPlayState by remember { mutableStateOf<Boolean?>(null) }
-    var scrubbing by remember { mutableStateOf(false) }
-    var scrubValue by remember { mutableStateOf(0L) }
     var localFilePath by remember { mutableStateOf("") }
     var showAliasDialog by remember { mutableStateOf(true) }
     var aliasName by remember { mutableStateOf(user.name.ifBlank { user.username.ifBlank { "من" } }) }
@@ -161,9 +161,12 @@ fun LobbyScreen(
     // ------- video engine (vlcj) -------
     val engine = remember {
         VideoEngine(
-            onTimeChanged = { t, d -> currentTimeMs = t; durationMs = d },
+            onTimeChanged = { t, d ->
+                time.currentMs = t
+                time.durationMs = d
+            },
             onPlayingChange = { playing ->
-                isPlayingLocal = playing
+                time.playing = playing
                 val e = engineHolder[0]
                 if (e != null && !e.isSyncing && playerReady) {
                     val justReloaded = System.currentTimeMillis() - e.lastMediaLoadAt < 1500
@@ -270,12 +273,13 @@ fun LobbyScreen(
         }
     }
 
-    // ------- floating message notification + chime (when chat hidden) -------
+    // ------- floating message notification + chime (only when chat is hidden) -------
     LaunchedEffect(messages.size) {
         val last = messages.lastOrNull()
-        if (last != null && !last.isSystemMessage && last.userId != myUserId) {
+        if (last != null && !last.isSystemMessage && last.userId != myUserId && !chatOpen) {
             Res.playChime()
             notification = last.username to last.message
+            chatUnread = true
             val stamp = ++notifStamp
             delay(4500)
             if (stamp == notifStamp) notification = null
@@ -394,18 +398,23 @@ fun LobbyScreen(
         )
     }
 
-    // ------- video settings dialog (audio track / subtitle / speed) -------
-    if (showVideoSettings) {
-        VideoSettingsDialog(
-            engine = engine,
-            tracksVersion = tracksVersion,
-            onDismiss = { showVideoSettings = false }
-        )
+    // pick a local video file — shared by the empty-state button and the controls bar
+    val pickLocalFile = {
+        val chooser = JFileChooser()
+        val r = chooser.showOpenDialog(null)
+        if (r == JFileChooser.APPROVE_OPTION) {
+            val f = chooser.selectedFile
+            localFilePath = f.absolutePath
+            ws.sendSharedFileMode(f.name)
+            ws.updateVideoUrl(localFilePath)
+        }
     }
 
     // ================= LAYOUT (RTL: first child = visual RIGHT) =================
     Row(Modifier.fillMaxSize().background(AppBgGradient)) {
-        // chat panel docked to the visual RIGHT side
+        // chat panel docked to the visual RIGHT side. In fullscreen the header is
+        // hidden, so a slim edge dock with the chat icon sits at the screen edge —
+        // tap it and the chat window opens.
         if (chatOpen) {
             ChatPanel(
                 messages = messages,
@@ -413,6 +422,14 @@ fun LobbyScreen(
                 myUserId = myUserId,
                 onClose = { chatOpen = false },
                 onSend = { text -> ws.sendMessage(text, aliasName.ifBlank { "من" }) }
+            )
+        } else if (fullscreen) {
+            FullscreenChatDock(
+                unread = chatUnread,
+                onOpenChat = {
+                    chatUnread = false
+                    chatOpen = true
+                }
             )
         }
 
@@ -482,13 +499,24 @@ fun LobbyScreen(
                         )
                     }
 
-                    // chat toggle
-                    IconButton(onClick = { chatOpen = !chatOpen }) {
-                        Icon(
-                            Icons.Filled.ChatBubble,
-                            contentDescription = "گفتگو",
-                            tint = if (chatOpen) YellowAccent else MediumGrayText
-                        )
+                    // chat toggle (unread dot while the chat is closed)
+                    Box {
+                        IconButton(onClick = { chatOpen = !chatOpen }) {
+                            Icon(
+                                Icons.Filled.ChatBubble,
+                                contentDescription = "گفتگو",
+                                tint = if (chatOpen) YellowAccent else MediumGrayText
+                            )
+                        }
+                        if (chatUnread) {
+                            Box(
+                                Modifier
+                                    .size(9.dp)
+                                    .clip(CircleShape)
+                                    .background(RedAccent)
+                                    .align(Alignment.TopEnd)
+                            )
+                        }
                     }
 
                     // exit (host gets the close-room option too)
@@ -592,16 +620,7 @@ fun LobbyScreen(
                         Spacer(Modifier.height(14.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             Button(
-                                onClick = {
-                                    val chooser = JFileChooser()
-                                    val r = chooser.showOpenDialog(null)
-                                    if (r == JFileChooser.APPROVE_OPTION) {
-                                        val f = chooser.selectedFile
-                                        localFilePath = f.absolutePath
-                                        ws.sendSharedFileMode(f.name)
-                                        ws.updateVideoUrl(localFilePath)
-                                    }
-                                },
+                                onClick = pickLocalFile,
                                 shape = RoundedCornerShape(12.dp),
                                 elevation = null,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
@@ -622,104 +641,57 @@ fun LobbyScreen(
                         }
                     }
                 }
+            }
 
-                // play error toast
-                if (playError.isNotBlank()) {
-                    Box(Modifier.align(Alignment.TopCenter).padding(10.dp)) {
-                        Text(
-                            playError,
-                            color = Color.White, fontSize = 12.sp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(RedAccent)
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                        )
-                    }
+            // ---- play error (in-layout so the VLC video surface never covers it) ----
+            if (playError.isNotBlank()) {
+                Row(
+                    Modifier.fillMaxWidth().background(DarkCardBackground)
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        playError,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(RedAccent)
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                    TextButton(onClick = { playError = "" }) { Text("بستن", color = MediumGrayText) }
                 }
+            }
+
+            // ---- video settings panel (in-layout: audio track / subtitle / speed) ----
+            // NOT a dialog window — dialog windows get stuck behind the main window
+            // on KDE/X11. In-layout = always visible, windowed AND fullscreen.
+            AnimatedVisibility(
+                visible = showVideoSettings,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                VideoSettingsPanel(
+                    engine = engine,
+                    tracksVersion = tracksVersion,
+                    onClose = { showVideoSettings = false }
+                )
             }
 
             // ---- controls bar (below the video — the timeline is never covered) ----
-            Row(
-                Modifier.fillMaxWidth().background(DarkCardBackground)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Box(
-                    Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(YellowGrad)
-                        .clickable { if (isPlayingLocal) engine.pause() else engine.play() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        if (isPlayingLocal) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = "پخش/توقف",
-                        tint = Color(0xFF10131A),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                Text(formatTime(currentTimeMs), fontSize = 11.sp, color = LightGrayText, modifier = Modifier.width(48.dp))
-
-                Slider(
-                    value = if (durationMs > 0) {
-                        (if (scrubbing) scrubValue.toFloat() else currentTimeMs.toFloat()) / durationMs.toFloat()
-                    } else 0f,
-                    onValueChange = {
-                        scrubbing = true
-                        scrubValue = (it * durationMs).toLong()
-                    },
-                    onValueChangeFinished = {
-                        if (durationMs > 0) {
-                            engine.seekTo(scrubValue)
-                            ws.seekVideo(scrubValue / 1000.0)
-                        }
-                        scrubbing = false
-                    },
-                    colors = androidx.compose.material3.SliderDefaults.colors(
-                        thumbColor = YellowAccent,
-                        activeTrackColor = YellowAccent,
-                        inactiveTrackColor = BorderGray
-                    ),
-                    modifier = Modifier.weight(1f)
-                )
-
-                Text(formatTime(durationMs), fontSize = 11.sp, color = MediumGrayText, modifier = Modifier.width(48.dp))
-
-                // open local file
-                IconButton(onClick = {
-                    val chooser = JFileChooser()
-                    val r = chooser.showOpenDialog(null)
-                    if (r == JFileChooser.APPROVE_OPTION) {
-                        val f = chooser.selectedFile
-                        localFilePath = f.absolutePath
-                        ws.sendSharedFileMode(f.name)
-                        ws.updateVideoUrl(localFilePath)
-                    }
-                }) {
-                    Icon(
-                        Icons.Filled.FolderOpen,
-                        contentDescription = "انتخاب فایل محلی",
-                        tint = MediumGrayText
-                    )
-                }
-
-                // settings — full dialog with audio-track / subtitle / speed sections
-                IconButton(onClick = { showVideoSettings = true }) {
-                    Icon(Icons.Filled.Settings, contentDescription = "تنظیمات پخش", tint = MediumGrayText)
-                }
-
-                // fullscreen toggle
-                IconButton(onClick = onToggleFullscreen) {
-                    Icon(
-                        if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                        contentDescription = "تمام‌صفحه",
-                        tint = MediumGrayText
-                    )
-                }
-            }
+            ControlsBar(
+                time = time,
+                engine = engine,
+                fullscreen = fullscreen,
+                onSeekFinished = { ms ->
+                    engine.seekTo(ms)
+                    ws.seekVideo(ms / 1000.0)
+                },
+                onOpenFile = pickLocalFile,
+                onToggleSettings = { showVideoSettings = !showVideoSettings },
+                onToggleFullscreen = onToggleFullscreen
+            )
         }
     }
 }
@@ -788,4 +760,150 @@ private fun formatTime(ms: Long): String {
     val m = (totalSec % 3600) / 60
     val s = totalSec % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+/** Player time/playing holder — VLC ticks (~5-10 per second) only recompose the
+ *  small composables that read it (ControlsBar), never the whole lobby screen. */
+private class TimeHolder {
+    var currentMs by mutableLongStateOf(0L)
+    var durationMs by mutableLongStateOf(0L)
+    var playing by mutableStateOf(false)
+}
+
+/**
+ * Playback controls bar — own composable so the frequent VLC time ticks stay
+ * scoped here (smoothness: the rest of the screen is untouched while playing).
+ */
+@Composable
+private fun ControlsBar(
+    time: TimeHolder,
+    engine: VideoEngine,
+    fullscreen: Boolean,
+    onSeekFinished: (Long) -> Unit,
+    onOpenFile: () -> Unit,
+    onToggleSettings: () -> Unit,
+    onToggleFullscreen: () -> Unit
+) {
+    var scrubbing by remember { mutableStateOf(false) }
+    var scrubValue by remember { mutableLongStateOf(0L) }
+    val currentMs = time.currentMs
+    val durationMs = time.durationMs
+    val playing = time.playing
+
+    Row(
+        Modifier.fillMaxWidth().background(DarkCardBackground)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(YellowGrad)
+                .clickable { if (playing) engine.pause() else engine.play() },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = "پخش/توقف",
+                tint = Color(0xFF10131A),
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        Text(formatTime(currentMs), fontSize = 11.sp, color = LightGrayText, modifier = Modifier.width(48.dp))
+
+        Slider(
+            value = if (durationMs > 0) {
+                (if (scrubbing) scrubValue.toFloat() else currentMs.toFloat()) / durationMs.toFloat()
+            } else 0f,
+            onValueChange = {
+                scrubbing = true
+                scrubValue = (it * durationMs).toLong()
+            },
+            onValueChangeFinished = {
+                if (durationMs > 0) onSeekFinished(scrubValue)
+                scrubbing = false
+            },
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = YellowAccent,
+                activeTrackColor = YellowAccent,
+                inactiveTrackColor = BorderGray
+            ),
+            modifier = Modifier.weight(1f)
+        )
+
+        Text(formatTime(durationMs), fontSize = 11.sp, color = MediumGrayText, modifier = Modifier.width(48.dp))
+
+        // open local file
+        IconButton(onClick = onOpenFile) {
+            Icon(
+                Icons.Filled.FolderOpen,
+                contentDescription = "انتخاب فایل محلی",
+                tint = MediumGrayText
+            )
+        }
+
+        // settings — opens the in-layout audio/subtitle/speed panel
+        IconButton(onClick = onToggleSettings) {
+            Icon(
+                Icons.Filled.Settings,
+                contentDescription = "تنظیمات پخش (تراک صدا، زیرنویس، سرعت)",
+                tint = MediumGrayText
+            )
+        }
+
+        // fullscreen toggle
+        IconButton(onClick = onToggleFullscreen) {
+            Icon(
+                if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                contentDescription = "تمام‌صفحه",
+                tint = MediumGrayText
+            )
+        }
+    }
+}
+
+/**
+ * Fullscreen edge dock — a slim strip at the visual right edge of the screen
+ * with the chat icon. The header (which owns the chat toggle) is hidden in
+ * fullscreen, so this dock keeps the chat one tap away: tap the icon and the
+ * chat window opens beside the video. Shows a red dot when unread messages
+ * arrived while the chat was closed.
+ */
+@Composable
+private fun FullscreenChatDock(unread: Boolean, onOpenChat: () -> Unit) {
+    Column(
+        Modifier
+            .width(46.dp)
+            .fillMaxHeight()
+            .background(DarkCardBackground)
+            .border(1.dp, CardStrokeColor),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(16.dp))
+        Box {
+            IconButton(onClick = onOpenChat) {
+                Icon(
+                    Icons.Filled.ChatBubble,
+                    contentDescription = "باز کردن گفتگو",
+                    tint = YellowAccent,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            if (unread) {
+                Box(
+                    Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(RedAccent)
+                        .align(Alignment.TopEnd)
+                )
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Text("گفتگو", fontSize = 10.sp, color = MediumGrayText)
+        Spacer(Modifier.height(10.dp))
+    }
 }

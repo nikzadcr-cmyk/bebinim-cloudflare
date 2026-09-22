@@ -50,6 +50,10 @@ import java.awt.GraphicsEnvironment
  * Same backend, same basemsg-* WebSocket protocol, same voice framing as the Android app.
  */
 fun main() {
+    // COLOR EMOJI: register the bundled Noto Color Emoji with fontconfig BEFORE
+    // Skia initializes its font manager (must happen before the first text layout).
+    FontConfig.install()
+
     // smoothness: force the GPU (OpenGL) renderer — falls back to SOFTWARE only if GL init fails
     System.setProperty("skiko.renderApi", "OPENGL")
     System.setProperty("skiko.fallback.renderApi", "SOFTWARE")

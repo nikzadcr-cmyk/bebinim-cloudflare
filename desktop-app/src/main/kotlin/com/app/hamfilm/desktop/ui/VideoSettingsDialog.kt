@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,12 +25,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,8 +47,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.app.hamfilm.desktop.ChipDark
 import com.app.hamfilm.desktop.ChipStrokeColor
+import com.app.hamfilm.desktop.CardStrokeColor
 import com.app.hamfilm.desktop.DarkCardBackground
 import com.app.hamfilm.desktop.GreenAccent
+import com.app.hamfilm.desktop.HeaderGrad
 import com.app.hamfilm.desktop.LightGrayText
 import com.app.hamfilm.desktop.MediumGrayText
 import com.app.hamfilm.desktop.SelectionBlue
@@ -73,17 +76,59 @@ private fun humanTrackName(desc: String): String {
 }
 
 /**
- * Full video-settings dialog — port of the Android VideoSettingsSheet:
+ * Full video-settings PANEL — port of the Android VideoSettingsSheet:
  *  • تراک صدا (audio tracks, with "هیچکدام")
  *  • زیرنویس (subtitle tracks, disable, load external .srt/.vtt/.ass)
  *  • سرعت پخش (0.5x … 2x)
- * Sections are ALWAYS shown while a movie is loaded — no more hidden options.
+ *
+ * Rendered IN-LAYOUT (between the video and the controls bar), NOT as a separate
+ * dialog window — separate dialog windows get stuck BEHIND the main window on
+ * KDE/X11 (focus-stealing prevention), which is why nothing appeared before.
+ * In-layout = always visible, in windowed AND fullscreen mode.
  */
 @Composable
-fun VideoSettingsDialog(
+fun VideoSettingsPanel(
     engine: VideoEngine,
     tracksVersion: Int,
-    onDismiss: () -> Unit
+    onClose: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(DarkCardBackground)
+            .border(1.dp, CardStrokeColor)
+    ) {
+        // ---- panel header ----
+        Row(
+            Modifier.fillMaxWidth().background(HeaderGrad).padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Filled.Settings, contentDescription = null,
+                tint = YellowAccent, modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "تنظیمات پخش",
+                color = LightGrayText,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = onClose) {
+                Icon(Icons.Filled.Close, contentDescription = "بستن", tint = MediumGrayText)
+            }
+        }
+
+        VideoSettingsSections(engine, tracksVersion, onClose)
+    }
+}
+
+@Composable
+private fun VideoSettingsSections(
+    engine: VideoEngine,
+    tracksVersion: Int,
+    onClose: () -> Unit
 ) {
     // local reload bump — re-reads tracks after the user loads an external subtitle
     var localVersion by remember { mutableStateOf(0) }
@@ -93,26 +138,14 @@ fun VideoSettingsDialog(
     var currentSub by remember(tracksVersion, localVersion) { mutableStateOf(engine.currentSubtitleTrackId) }
     var currentRate by remember(tracksVersion) { mutableStateOf(engine.currentRate) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = DarkCardBackground,
-        shape = RoundedCornerShape(18.dp),
-        title = {
-            Text(
-                "تنظیمات پخش",
-                color = LightGrayText,
-                fontWeight = FontWeight.Bold,
-                fontSize = 17.sp
-            )
-        },
-        text = {
-            Column(
-                Modifier
-                    .widthIn(min = 360.dp, max = 440.dp)
-                    .heightIn(max = 470.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(max = 280.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
                 // ---------------- audio ----------------
                 SectionHeader(Icons.Filled.Audiotrack, "تراک صدا", com.app.hamfilm.desktop.BlueAccent)
                 if (audio.isEmpty()) {
@@ -184,16 +217,7 @@ fun VideoSettingsDialog(
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = YellowAccent)
-            ) { Text("بستن", color = Color(0xFF10131A)) }
-        }
-    )
-}
+    }
 
 @Composable
 private fun SectionHeader(icon: ImageVector, title: String, tint: Color) {
