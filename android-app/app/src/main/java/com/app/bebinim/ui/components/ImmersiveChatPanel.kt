@@ -78,6 +78,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
+import coil.compose.AsyncImage
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -460,9 +461,11 @@ fun CompactMessageItem(message: ChatMessage, currentUserId: String, iconId: Stri
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = if (isOwn) Arrangement.Start else Arrangement.End
         ) {
-            androidx.compose.material3.Icon(
-                painterResource(stickerRes), message.username,
-                modifier = Modifier.size(90.dp), tint = Color.Unspecified
+            // animated GIF stickers (romantic movie scenes) render + animate via Coil
+            AsyncImage(
+                model = stickerRes,
+                contentDescription = message.username,
+                modifier = Modifier.size(90.dp)
             )
         }
         return
@@ -581,11 +584,11 @@ fun EmojiStickerPickerPanel(
                                 .padding(4.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            androidx.compose.material3.Icon(
-                                painterResource(sticker.drawableRes),
-                                sticker.fileName,
-                                modifier = Modifier.size(64.dp),
-                                tint = Color.Unspecified
+                            // animated GIF stickers animate right in the picker
+                            AsyncImage(
+                                model = sticker.drawableRes,
+                                contentDescription = sticker.fileName,
+                                modifier = Modifier.size(64.dp)
                             )
                         }
                     }

@@ -90,6 +90,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import coil.compose.AsyncImage
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -1614,9 +1615,11 @@ private fun MessageItem(message: ChatMessage, currentUserId: String, iconId: Str
                         modifier = Modifier.padding(bottom = 2.dp, start = 4.dp)
                     )
                 }
-                Icon(
-                    painterResource(stickerRes), "استیکر",
-                    modifier = Modifier.size(110.dp), tint = Color.Unspecified
+                // animated GIF stickers (romantic movie scenes) render + animate via Coil
+                AsyncImage(
+                    model = stickerRes,
+                    contentDescription = "استیکر",
+                    modifier = Modifier.size(110.dp)
                 )
                 Text(
                     formatTime(message.timestamp),

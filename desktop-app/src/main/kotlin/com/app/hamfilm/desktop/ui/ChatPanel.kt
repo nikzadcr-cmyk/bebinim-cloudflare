@@ -143,18 +143,17 @@ fun ChatPanel(
                         item {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 rowStickers.forEach { name ->
-                                    Res.sticker(name)?.let { bmp ->
-                                        Image(
-                                            bitmap = bmp,
-                                            contentDescription = name,
-                                            modifier = Modifier
-                                                .size(64.dp)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .clickable {
-                                                    onSend(StickerCatalog.STICKER_PREFIX + name)
-                                                    showStickers = false
-                                                }
-                                        )
+                                    Box(
+                                        Modifier
+                                            .size(64.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .clickable {
+                                                onSend(StickerCatalog.STICKER_PREFIX + name)
+                                                showStickers = false
+                                            }
+                                    ) {
+                                        // animated GIF stickers animate right in the picker
+                                        StickerImage(fileName = name, modifier = Modifier.fillMaxSize())
                                     }
                                 }
                             }
@@ -286,16 +285,13 @@ private fun MessageItem(
             Spacer(Modifier.height(2.dp))
             val stickerFile = StickerCatalog.fileNameFor(msg.message)
             if (stickerFile != null) {
-                Res.sticker(stickerFile)?.let { bmp ->
-                    Image(
-                        bitmap = bmp,
-                        contentDescription = stickerFile,
-                        modifier = Modifier
-                            .widthIn(max = 130.dp)
-                            .size(width = 120.dp, height = 120.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                    )
-                }
+                // animated GIF stickers (romantic movie scenes) — animates via StickerImage
+                StickerImage(
+                    fileName = stickerFile,
+                    modifier = Modifier
+                        .size(width = 120.dp, height = 120.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                )
             } else {
                 Text(
                     msg.message,

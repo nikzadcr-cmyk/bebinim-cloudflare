@@ -83,6 +83,16 @@ object StickerCatalog {
 
     val groups: List<StickerGroup> = listOf(
         StickerGroup(
+            "love", "عاشقانه",
+            listOf(
+                "love-titanic-flying", "love-titanic-jack", "love-the-notebook",
+                "love-dirty-dancing", "love-first-love", "love-remo-scene",
+                "love-vikram-scene", "love-dhanush", "love-ram-charan",
+                "love-rashmika-hug", "love-kiss", "love-hug",
+                "love-sweet-kiss", "love-morning-kiss", "love-staring"
+            )
+        ),
+        StickerGroup(
             "pishi", "پیشی",
             listOf(
                 "pishi-cat-happy", "pishi-cat-smile", "pishi-cat-smilling", "pishi-catnoted",

@@ -18,6 +18,26 @@ object StickerCatalog {
 
     val groups: List<StickerGroup> = listOf(
         StickerGroup(
+            "love", "عاشقانه",
+            listOf(
+                Sticker("love-titanic-flying", R.drawable.sticker_love_titanic_flying),
+                Sticker("love-titanic-jack", R.drawable.sticker_love_titanic_jack),
+                Sticker("love-the-notebook", R.drawable.sticker_love_the_notebook),
+                Sticker("love-dirty-dancing", R.drawable.sticker_love_dirty_dancing),
+                Sticker("love-first-love", R.drawable.sticker_love_first_love),
+                Sticker("love-remo-scene", R.drawable.sticker_love_remo_scene),
+                Sticker("love-vikram-scene", R.drawable.sticker_love_vikram_scene),
+                Sticker("love-dhanush", R.drawable.sticker_love_dhanush),
+                Sticker("love-ram-charan", R.drawable.sticker_love_ram_charan),
+                Sticker("love-rashmika-hug", R.drawable.sticker_love_rashmika_hug),
+                Sticker("love-kiss", R.drawable.sticker_love_kiss),
+                Sticker("love-hug", R.drawable.sticker_love_hug),
+                Sticker("love-sweet-kiss", R.drawable.sticker_love_sweet_kiss),
+                Sticker("love-morning-kiss", R.drawable.sticker_love_morning_kiss),
+                Sticker("love-staring", R.drawable.sticker_love_staring)
+            )
+        ),
+        StickerGroup(
             "pishi", "پیشی",
             listOf(
                 Sticker("pishi-cat-happy", R.drawable.sticker_pishi_cat_happy),

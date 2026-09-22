@@ -57,6 +57,54 @@ object Res {
         return bmp
     }
 
+    // ---------------- animated GIF stickers ----------------
+
+    /** One decoded frame of an animated GIF sticker. */
+    data class GifFrame(val bitmap: ImageBitmap, val durationMs: Int)
+
+    /**
+     * Decodes an animated GIF sticker (stickers/<name>.gif) into composited
+     * frames + per-frame durations. Returns null when the sticker has no GIF
+     * (static PNG packs fall back to [sticker]).
+     * javax.imageio's GIF reader composites partial frames onto the previous
+     * canvas internally, so every returned frame is a complete picture.
+     */
+    fun gifFrames(fileName: String): List<GifFrame>? {
+        if (fileName.isBlank()) return null
+        val data = bytes("stickers/$fileName.gif") ?: return null
+        return try {
+            val input = javax.imageio.stream.MemoryCacheImageInputStream(java.io.ByteArrayInputStream(data))
+            val reader = javax.imageio.ImageIO.getImageReadersByFormatName("gif").next()
+            reader.input = input
+            val count = reader.getNumImages(true)
+            val frames = ArrayList<GifFrame>(count)
+            for (i in 0 until count) {
+                val img = reader.read(i) // composited full frame
+                var delayMs = 80
+                try {
+                    val tree = reader.getImageMetadata(i).getAsTree("javax_imageio_gif_image_1.0")
+                    val kids = tree.childNodes
+                    for (j in 0 until kids.length) {
+                        val node = kids.item(j) as? org.w3c.dom.Node ?: continue
+                        if (node.nodeName == "GraphicControlExtension") {
+                            val attrs = node.attributes
+                            val d = attrs.getNamedItem("delayTime")?.nodeValue?.toLongOrNull() ?: continue
+                            delayMs = (d * 10).toInt().coerceIn(20, 2000)
+                        }
+                    }
+                } catch (_: Throwable) {}
+                val baos = ByteArrayOutputStream()
+                javax.imageio.ImageIO.write(img, "png", baos)
+                frames.add(GifFrame(imageFromBytes(baos.toByteArray()), delayMs))
+            }
+            reader.dispose()
+            input.close()
+            if (frames.isEmpty()) null else frames
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     /** legacy icon ids → remote jpg (cached) */
     private val remoteImages = ConcurrentHashMap<String, ImageBitmap?>()
     suspend fun remoteImage(url: String): ImageBitmap? = withContext(Dispatchers.IO) {
