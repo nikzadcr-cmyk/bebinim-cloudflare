@@ -28,8 +28,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # NOTE: android-actions/setup-android@v3 was removed — it tries to install the
+      # legacy "tools" package which sdkmanager 16.0 no longer ships, failing the job.
+      # ubuntu-latest runners already ship the full Android SDK ($ANDROID_HOME).
+      - name: Verify Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/build-tools" | sort -V | tail -1
+          sdkmanager --version || true
 
       - name: Setup Gradle (with cache)
         uses: gradle/actions/setup-gradle@v3
