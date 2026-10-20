@@ -8,6 +8,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
@@ -212,6 +213,7 @@ class WebSocketManager private constructor() {
                 put("type", "verify")
                 put("data", authToken)
             }.toString())
+            startPingLoop()
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -243,6 +245,20 @@ class WebSocketManager private constructor() {
                 if (hasJoinedLobby) {
                     _connectionState.value = ConnectionState.Error("اتصال قطع شد. لطفاً اتصال اینترنت خود را بررسی کنید.")
                 }
+            }
+        }
+    }
+
+    /** App-level liveness ping every 25s. OkHttp's protocol-level pings are answered by
+     *  the Cloudflare edge and NEVER reach the Durable Object — without this the server's
+     *  lastSeen goes stale for quiet viewers and dead sockets linger as "fake users". */
+    private fun startPingLoop() {
+        val gen = connectGeneration
+        scope.launch {
+            while (isActive && gen == connectGeneration) {
+                delay(25_000)
+                val ws = webSocket ?: break
+                try { ws.send(JSONObject().put("type", "ping").toString()) } catch (_: Exception) {}
             }
         }
     }
@@ -496,6 +512,9 @@ class WebSocketManager private constructor() {
         val data = obj.opt("data")
 
         when (type) {
+            "ping" -> Unit // never inbound, kept for symmetry
+            "pong" -> Unit // liveness reply to our 25s app-level ping — no-op
+
             "verify-result" -> {
                 if (state == 1) {
                     _isVerified.value = true
@@ -580,7 +599,11 @@ class WebSocketManager private constructor() {
 
             "basemsg-play-pause" -> {
                 val playing = data == "play"
-                val time = obj.optDouble("currentTime", 0.0)
+                val raw = obj.optDouble("currentTime", Double.NaN)
+                val prev = _videoSyncState.value?.currentTime ?: 0.0
+                // defense-in-depth: an insane position (NaN / negative / epoch-scale garbage
+                // from a buggy peer or server) must never drag the local player — keep ours
+                val time = if (raw.isFinite() && raw in 0.0..86400.0) raw else prev
                 _videoSyncState.value = VideoSyncState(time, playing, isSeek = false)
             }
 
@@ -601,7 +624,9 @@ class WebSocketManager private constructor() {
                 }
                 val mode = d.optString("mode", "link")
                 val playing = d.optString("playing", "pause") == "play"
-                _playbackSyncState.value = PlaybackSyncState(url, d.optDouble("currentTime", 0.0), playing, mode, fromSync = true)
+                val rawT = d.optDouble("currentTime", Double.NaN)
+                val t = if (rawT.isFinite() && rawT in 0.0..86400.0) rawT else 0.0
+                _playbackSyncState.value = PlaybackSyncState(url, t, playing, mode, fromSync = true)
             }
 
             "basemsg-chat" -> {

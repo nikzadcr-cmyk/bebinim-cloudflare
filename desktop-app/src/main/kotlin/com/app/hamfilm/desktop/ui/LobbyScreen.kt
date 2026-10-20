@@ -240,10 +240,16 @@ fun LobbyScreen(
             if (currentMode == "link" || currentMode == "shared") {
                 engine.isSyncing = true
                 val target = (sync.currentTime * 1000).toLong()
-                if (sync.isSeek) {
-                    engine.seekTo(target)
-                } else if (sync.isPlaying && abs(engine.currentTimeMs - target) > 1500) {
-                    engine.seekTo(target)
+                // plausibility gate: never seek past the media end (+60s tolerance) — a
+                // corrupt sync value must degrade to "no seek", not "jump to the end"
+                val dur = engine.durationMs
+                val plausible = target >= 0 && (dur <= 0 || target <= dur + 60_000)
+                if (plausible) {
+                    if (sync.isSeek) {
+                        engine.seekTo(target)
+                    } else if (sync.isPlaying && abs(engine.currentTimeMs - target) > 1500) {
+                        engine.seekTo(target)
+                    }
                 }
                 if (sync.isPlaying) engine.play() else engine.pause()
                 delay(800)
@@ -263,7 +269,11 @@ fun LobbyScreen(
                     engine.loadPaused(sync.videoUrl)
                 }
                 val target = (sync.currentTime * 1000).toLong()
-                if (abs(engine.currentTimeMs - target) > 1500) {
+                // plausibility gate: ignore seek targets beyond the media end (+60s) —
+                // a corrupt late-join sync must not fling the player to the end
+                val dur = engine.durationMs
+                val plausible = target >= 0 && (dur <= 0 || target <= dur + 60_000)
+                if (plausible && abs(engine.currentTimeMs - target) > 1500) {
                     engine.seekTo(target)
                 }
                 if (sync.isPlaying) engine.play() else engine.pause()

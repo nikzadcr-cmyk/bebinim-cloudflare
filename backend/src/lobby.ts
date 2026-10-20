@@ -22,9 +22,10 @@ export interface LobbyUser {
   ws: WebSocket | null;
   ready: boolean;
   micEnabled: boolean;
-  session: number;       // voice session id
+  session: number;       // voice session id (0 = connected but never joined)
   lobbyCode: string;     // lobby this socket joined ("" = not in a lobby) — scopes relay/broadcasts
   lastSeen: number;
+  joinedAt: number;      // wall-clock join time — gives the users list a stable order
 }
 
 interface VoiceCred {
@@ -75,17 +76,26 @@ export class LobbyRoom {
     this.state.blockConcurrencyWhile(async () => {
       this.lobbyCode = (await this.state.storage.get<string>('code')) || '';
       this.lobbyType = (await this.state.storage.get<string>('lobbyType')) || 'movie';
-      const pb = await this.state.storage.get<{ url?: string; mode?: string; currentTime?: number; playing?: boolean }>('playback');
+      const pb = await this.state.storage.get<{ url?: string; mode?: string; currentTime?: number; playing?: boolean; updatedAt?: number }>('playback');
       if (pb) {
         this.currentUrl = pb.url || null;
         this.currentMode = pb.mode || 'link';
         this.currentTime = Number(pb.currentTime || 0);
         this.playing = !!pb.playing;
+        this.updatedAt = Number(pb.updatedAt || 0);
       } else {
         this.currentUrl = (await this.state.storage.get<string>('url')) || null;
         this.currentMode = (await this.state.storage.get<string>('mode')) || 'link';
         this.currentTime = (await this.state.storage.get<number>('currentTime')) || 0;
         this.playing = !!(await this.state.storage.get<boolean>('playing'));
+      }
+      // BUGFIX ("وسط فیلم یهو فیلم قطع میشه میره تا اخر"): `updatedAt` is the drift
+      // anchor for playbackTime(). An isolate restart (hibernation wake / deploy) used to
+      // leave it at 0, so the next (re)joining client was told currentTime + ~1.7 BILLION
+      // seconds → seek clamped to the end of the stream. Restore it; if missing while
+      // playing, anchor at NOW (zero phantom drift) instead of epoch.
+      if (this.playing && (!Number.isFinite(this.updatedAt) || this.updatedAt <= 0 || this.updatedAt > Date.now())) {
+        this.updatedAt = Date.now();
       }
       this.musicMeta = (await this.state.storage.get<Record<string, unknown>>('musicMeta')) || null;
       this.creatorRealId = (await this.state.storage.get<string>('creator')) || null;
@@ -120,9 +130,10 @@ export class LobbyRoom {
     }
     if (url.pathname === '/info') {
       this.hydrate();
+      const joined = Array.from(this.users.values()).filter((u) => u.session > 0);
       return new Response(JSON.stringify({
-        code: this.lobbyCode, type: this.lobbyType, users: this.users.size, closed: this.closed,
-        userList: Array.from(this.users.values()).map((u) => ({ user_id: u.userId, alias: u.alias, username: u.username })),
+        code: this.lobbyCode, type: this.lobbyType, users: joined.length, closed: this.closed,
+        userList: joined.map((u) => ({ user_id: u.userId, alias: u.alias, username: u.username })),
       }), { headers: { 'Content-Type': 'application/json' } });
     }
     return new Response('not found', { status: 404 });
@@ -138,7 +149,7 @@ export class LobbyRoom {
     const user: LobbyUser = {
       socketId, realId: '', userId: '', alias: '', icon: '', username: '',
       isCreator: false, ws: server, ready: false, micEnabled: false,
-      session: 0, lobbyCode: '', lastSeen: Date.now(),
+      session: 0, lobbyCode: '', lastSeen: Date.now(), joinedAt: 0,
     };
     this.users.set(socketId, user);
     this.socketIds.set(server, socketId);
@@ -153,10 +164,11 @@ export class LobbyRoom {
     // the per-socket identity in the socket attachment and rebuild maps on wake.
     server.serializeAttachment({
       socketId, realId: '', userId: '', alias: '', icon: '', username: '',
-      isCreator: false, ready: false, micEnabled: false, session: 0, lobbyCode: '',
+      isCreator: false, ready: false, micEnabled: false, session: 0, lobbyCode: '', joinedAt: 0,
     });
     this.state.acceptWebSocket(server);
     // return the CLIENT end in the 101 response; the accepted (server) end stays inside the DO
+    this.ensureHousekeepingAlarm(); // reaper must always be armed while sockets exist
 
     // pre-verify the query token if present; in-band verify also supported
     if (token) { void this.tryVerify(socketId, token); }
@@ -181,7 +193,8 @@ export class LobbyRoom {
           socketId: a.socketId, realId: a.realId || '', userId: a.realId || '',
           alias: a.alias || '', icon: a.icon || '', username: a.username || '',
           isCreator: !!a.isCreator, ws, ready: !!a.ready, micEnabled: !!a.micEnabled,
-          session: a.session || 0, lobbyCode: (a as { lobbyCode?: string }).lobbyCode || '', lastSeen: Date.now(),
+          session: a.session || 0, lobbyCode: (a as { lobbyCode?: string }).lobbyCode || '',
+          lastSeen: Date.now(), joinedAt: (a as { joinedAt?: number }).joinedAt || 0,
         });
         this.socketIds.set(ws, a.socketId);
         if (a.isCreator && !this.creatorSocketId) this.creatorSocketId = a.socketId;
@@ -196,6 +209,7 @@ export class LobbyRoom {
         socketId: u.socketId, realId: u.realId, userId: u.userId, alias: u.alias,
         icon: u.icon, username: u.username, isCreator: u.isCreator,
         ready: u.ready, micEnabled: u.micEnabled, session: u.session, lobbyCode: u.lobbyCode,
+        joinedAt: u.joinedAt,
       });
     } catch { /* noop */ }
   }
@@ -250,7 +264,15 @@ export class LobbyRoom {
 
   private usersJson(lobby?: string): Array<Record<string, unknown>> {
     return Array.from(this.users.values())
-      .filter((u) => lobby === undefined || (u.lobbyCode || '') === lobby)
+      .filter((u) => u.session > 0 && (lobby === undefined || (u.lobbyCode || '') === lobby))
+      .sort((a, b) => {
+        // deterministic order — creator first, then join time: the list must not
+        // reshuffle on every reconnect ("پروفایل‌ها می‌پرن")
+        if (a.isCreator !== b.isCreator) return a.isCreator ? -1 : 1;
+        const ja = a.joinedAt || 0, jb = b.joinedAt || 0;
+        if (ja !== jb) return ja - jb;
+        return a.socketId < b.socketId ? -1 : 1;
+      })
       .map((u) => ({
       user_id: u.socketId,   // client-facing id = socket id (original namespace)
       real_id: u.realId,
@@ -289,6 +311,11 @@ export class LobbyRoom {
     const state = typeof msg.state === 'number' ? msg.state : undefined;
 
     switch (type) {
+      case 'ping': { // app-level liveness (OkHttp protocol pings never reach the DO)
+        this.send(socketId, { type: 'pong', state: 1 });
+        return;
+      }
+
       case 'verify': {
         const token = typeof data === 'string' ? data : String(data ?? '');
         await this.tryVerify(socketId, token);
@@ -306,7 +333,8 @@ export class LobbyRoom {
           this.send(socketId, { type: 'basemsg-join-to-lobby', state: 0, msg: 'lobby closed', data: null });
           return;
         }
-        if (this.users.size > MAX_USERS_DEFAULT + 1) {
+        const joinedCount = Array.from(this.users.values()).filter((x) => x.session > 0).length;
+        if (joinedCount > MAX_USERS_DEFAULT + 1) {
           this.send(socketId, { type: 'basemsg-join-to-lobby', state: 0, msg: 'lobby full', data: null });
           return;
         }
@@ -323,9 +351,21 @@ export class LobbyRoom {
         await this.state.storage.put('lobbyType', this.lobbyType);
         u.session = this.nextSession++;
         u.lobbyCode = payload.lobby_code || this.lobbyCode;
+        u.joinedAt = Date.now();
+        // BUGFIX ("کاربرهای فیک" / duplicated profiles): a reconnecting client's old
+        // half-open socket lingered in the users list until the edge noticed the dead
+        // TCP connection — the same human appeared twice as a "fake user". When a user
+        // JOINS, silently drop their own stale socket (silent > 45s = dead connection).
+        for (const [sid, other] of Array.from(this.users)) {
+          if (sid !== socketId && other.realId && other.realId === u.realId &&
+              Date.now() - other.lastSeen > 45_000) {
+            this.removeUser(sid);
+          }
+        }
         // lobby is live again — cancel the empty-lobby auto-close alarm
         void this.state.storage.deleteAlarm();
         this.persistUser(u);
+        this.ensureHousekeepingAlarm();
 
         this.send(socketId, {
           type: 'basemsg-join-to-lobby',
@@ -405,7 +445,7 @@ export class LobbyRoom {
         const linkType = d.type || 'link';
         if (url) this.currentUrl = url;
         this.currentMode = ['aparat', 'shared', 'archive', 'radio', 'webview'].includes(linkType) ? linkType : 'link';
-        this.currentTime = Number(d.vcurrenttime || 0);
+        this.currentTime = this.saneTime(d.vcurrenttime ?? 0) ?? 0;
         this.playing = false; // fresh content always starts paused; clients auto-play on load
         for (const x of this.users.values()) x.ready = false; // re-gate playback for new content
         this.updatedAt = Date.now();
@@ -447,7 +487,8 @@ export class LobbyRoom {
       case 'basemsg-play-pause': {
         const isPlaying = data === 'play' || (data as { isPlaying?: boolean })?.isPlaying === true;
         this.playing = isPlaying;
-        this.currentTime = Number(msg.currentTime ?? (data as { currentTime?: number })?.currentTime ?? this.currentTime);
+        const pt = this.saneTime(msg.currentTime ?? (data as { currentTime?: number })?.currentTime);
+        if (pt !== null) this.currentTime = pt; // garbage position (NaN/epoch) never stored
         this.updatedAt = Date.now();
         // PERF: never await storage on the hot path — a durable write gated every
         // incoming frame/behind it (input gate) and delayed the broadcast (user:
@@ -458,7 +499,8 @@ export class LobbyRoom {
       }
 
       case 'basemsg-click-bar': {
-        const t = Number((data as { currentTime?: number })?.currentTime ?? 0);
+        const t = this.saneTime((data as { currentTime?: number })?.currentTime ?? 0);
+        if (t === null) return; // garbage seek — do NOT relay it to the room
         this.currentTime = t;
         this.updatedAt = Date.now();
         this.broadcast({ type: 'basemsg-click-bar', user_id: u.socketId, data: { currentTime: t } }, socketId, u.lobbyCode);
@@ -554,7 +596,16 @@ export class LobbyRoom {
 
   private playbackTime(): number {
     if (!this.playing) return this.currentTime;
-    return this.currentTime + (Date.now() - this.updatedAt) / 1000;
+    // hard caps: a stale/missing anchor must never push a client past the end
+    const deltaMs = Math.min(Math.max(0, Date.now() - (this.updatedAt || Date.now())), 86_400_000);
+    const t = this.currentTime + deltaMs / 1000;
+    return Number.isFinite(t) && t >= 0 ? t : this.currentTime;
+  }
+
+  /** sync positions must be sane seconds (0..24h) — guards against NaN/epoch-scale garbage */
+  private saneTime(t: unknown): number | null {
+    const n = Number(t);
+    return Number.isFinite(n) && n >= 0 && n <= 86_400 ? n : null;
   }
 
   private persistPlayback(): void {
@@ -565,6 +616,7 @@ export class LobbyRoom {
       mode: this.currentMode,
       currentTime: this.currentTime,
       playing: this.playing,
+      updatedAt: this.updatedAt,
     }).catch(() => { /* best-effort */ });
   }
 
@@ -626,6 +678,7 @@ export class LobbyRoom {
     }));
     this.broadcast({ type: 'basemsg-exit-lobby', data: remaining }, null, goneLobby);
     this.pushUsersList(goneLobby);
+    this.ensureHousekeepingAlarm();
     if (socketId === this.creatorSocketId) {
       // creator socket changed (reconnect) — hand creator role to any remaining socket
       // of the same real user; only truly-empty or creator-abandoned lobbies close.
@@ -643,9 +696,30 @@ export class LobbyRoom {
     }
   }
 
+  /** 60s housekeeping alarm: reaps junk/dead sockets that pollute the users list.
+   *  - never-joined probes older than 2 min (health checks, dead retries)
+   *  - members silent for 30 min (pinging clients stay fresh; legacy clients get one
+   *    auto-reconnect at worst — their verify-result re-joins the lobby transparently) */
+  private ensureHousekeepingAlarm(): void {
+    if (this.closed) return;
+    if (!this.state.storage.getAlarm()) void this.state.storage.setAlarm(Date.now() + 60_000);
+  }
+
   async webSocketAlarm(): Promise<void> {
     this.hydrate();
-    if (this.users.size === 0 && !this.closed) {
+    const now = Date.now();
+    for (const [sid, u] of Array.from(this.users)) {
+      if (u.session === 0 && now - (u.joinedAt || u.lastSeen || now) > 120_000) {
+        this.removeUser(sid);
+        continue;
+      }
+      if (u.session > 0 && now - u.lastSeen > 30 * 60_000) {
+        this.removeUser(sid);
+      }
+    }
+    if (this.users.size > 0) {
+      this.ensureHousekeepingAlarm();
+    } else if (!this.closed) {
       this.closed = true;
       await this.state.storage.put('closed', 1);
     }

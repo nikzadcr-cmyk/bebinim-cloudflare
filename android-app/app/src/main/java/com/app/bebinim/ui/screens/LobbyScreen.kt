@@ -413,11 +413,17 @@ fun LobbyScreen(
             if (currentMode == "link" || currentMode == "shared") {
                 isSyncing = true
                 val target = (sync.currentTime * 1000).toLong()
-                if (sync.isSeek) {
-                    exoPlayer.seekTo(target)
-                } else if (sync.isPlaying) {
-                    if (kotlin.math.abs(exoPlayer.currentPosition - target) > 1500) {
+                // plausibility gate: never seek past the media end (+60s tolerance) — a
+                // corrupt sync value must degrade to "no seek", not "jump to the end"
+                val dur = exoPlayer.duration
+                val plausible = target >= 0 && (dur <= 0 || target <= dur + 60_000)
+                if (plausible) {
+                    if (sync.isSeek) {
                         exoPlayer.seekTo(target)
+                    } else if (sync.isPlaying) {
+                        if (kotlin.math.abs(exoPlayer.currentPosition - target) > 1500) {
+                            exoPlayer.seekTo(target)
+                        }
                     }
                 }
                 exoPlayer.playWhenReady = sync.isPlaying
@@ -442,7 +448,11 @@ fun LobbyScreen(
                     exoPlayer.prepare()
                 }
                 val target = (sync.currentTime * 1000).toLong()
-                if (kotlin.math.abs(exoPlayer.currentPosition - target) > 1500) {
+                // plausibility gate: ignore seek targets beyond the media end (+60s) —
+                // a corrupt late-join sync must not fling the player to the end
+                val dur = exoPlayer.duration
+                val plausible = target >= 0 && (dur <= 0 || target <= dur + 60_000)
+                if (plausible && kotlin.math.abs(exoPlayer.currentPosition - target) > 1500) {
                     exoPlayer.seekTo(target)
                 }
                 exoPlayer.playWhenReady = sync.isPlaying
